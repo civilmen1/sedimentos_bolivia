@@ -314,7 +314,9 @@ function generateReportLink() {
     d50: document.getElementById('d50').value,
     depth: document.getElementById('depth').value,
     velocity: document.getElementById('velocity').value,
-    temp: document.getElementById('temp').value
+    temp: document.getElementById('temp').value,
+    q: document.getElementById('q_input').value,
+    b: document.getElementById('b_input').value
   });
   window.open('/report?' + params.toString(), '_blank');
 }

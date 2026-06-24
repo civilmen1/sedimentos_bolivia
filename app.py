@@ -169,6 +169,8 @@ def report():
         results = {
             'lat': lat, 'lon': lon, 'd50': d50, 'temp': temp,
             'depth': depth, 'velocity': velocity,
+            'q': request.args.get('q', 'N/A'),
+            'b': request.args.get('b', 'N/A'),
             'rho_w': round(rho_w, 2),
             'nu': f"{nu:.3e}",
             'ws': round(ws, 5),
