@@ -116,32 +116,68 @@ def van_rijn_bedload(v, depth, d50_mm, dstar, s, rho_w, nu, g=9.807):
         return qb_vol * s * rho_w
     return 0.0
 
-def solve_manning_y(q, b, s, n):
-    """
-    Solves for normal depth (y) in a rectangular channel using Manning's equation.
-    Q = (1/n) * A * R^(2/3) * S^(1/2)
-    """
-    if s <= 0:
-        return 0.1 # Fallback
+def calculate_conveyance(y, b, n):
+    """HEC-RAS style Conveyance K = (1/n) * A * R^(2/3)"""
+    if y <= 0: return 0
+    a = b * y
+    p = b + 2 * y
+    r = a / p
+    return (1/n) * a * (r**(2/3))
 
-    def func(y):
-        if y <= 0: return -q
+def solve_normal_depth_hec_ras(q, b, s, n, max_iter=100, tol=1e-5):
+    """
+    Iterative HEC-RAS style solver for Normal Depth (yn).
+    Uses Newton-Raphson on the conveyance-slope equation: Q = K * sqrt(S)
+    """
+    if s <= 0: return 0.1
+
+    # Initial guess (Standard wide channel approximation)
+    y = ((q * n) / (b * s**0.5))**(3/5)
+
+    for _ in range(max_iter):
+        # f(y) = K(y)*sqrt(s) - Q
         a = b * y
         p = b + 2 * y
         r = a / p
-        return (1/n) * a * (r**(2/3)) * (s**0.5) - q
+        k = (1/n) * a * (r**(2/3))
+        f_y = k * (s**0.5) - q
 
-    # Initial guess: assume wide channel (R approx y)
-    # q = (1/n) * b * y * y^(2/3) * s^0.5 => y^(5/3) = (q * n) / (b * s^0.5)
-    y_guess = ((q * n) / (b * s**0.5))**(3/5)
+        # dK/dy approximation for Newton-Raphson
+        dy = 0.001
+        k_plus = calculate_conveyance(y + dy, b, n)
+        dk_dy = (k_plus - k) / dy
+        df_dy = dk_dy * (s**0.5)
 
-    y_sol = fsolve(func, y_guess)
-    return float(y_sol[0])
+        y_new = y - f_y / df_dy
+        if abs(y_new - y) < tol:
+            return float(y_new)
+        y = y_new
+        if y <= 0: y = 0.001 # Prevent non-physical values
 
-def calculate_hydraulic_downscaling(q, b, s, n):
+    return float(y)
+
+def solve_critical_depth(q, b, g=9.807):
     """
-    Downscaling analysis to calculate y and v from Q, B, S, n.
+    Critical Depth (yc) for rectangular channel: yc = (q^2 / g)^(1/3)
+    where q is discharge per unit width (Q/B)
     """
-    y = solve_manning_y(q, b, s, n)
-    v = q / (b * y) if y > 0 else 0
-    return y, v
+    unit_q = q / b
+    return (unit_q**2 / g)**(1/3)
+
+def calculate_hydraulic_downscaling(q, b, s, n, g=9.807):
+    """
+    Downscaling analysis with HEC-RAS logic.
+    Returns yn, yc, v, Fr
+    """
+    yn = solve_normal_depth_hec_ras(q, b, s, n)
+    yc = solve_critical_depth(q, b, g)
+    v = q / (b * yn) if yn > 0 else 0
+    fr = v / (g * yn)**0.5 if yn > 0 else 0
+
+    return {
+        'depth': yn,
+        'critical_depth': yc,
+        'velocity': v,
+        'froude': fr,
+        'regime': 'Supercrítico' if fr > 1 else 'Subcrítico'
+    }

@@ -59,11 +59,14 @@ def calculate():
             ndti = 0.0
 
         # Hydraulic variables
+        hydraulic_results = {}
         if data.get('use_downscaling'):
             q = float(data.get('q', 10.0))
             b = float(data.get('b', 5.0))
             n_manning = get_manning_n_from_lc(landcover)
-            depth, velocity = calculate_hydraulic_downscaling(q, b, slope, n_manning)
+            hydraulic_results = calculate_hydraulic_downscaling(q, b, slope, n_manning)
+            depth = hydraulic_results['depth']
+            velocity = hydraulic_results['velocity']
         else:
             depth = float(data.get('depth', 1.0))
             velocity = float(data.get('velocity', 1.0))
@@ -119,7 +122,10 @@ def calculate():
             },
             'hydraulic': {
                 'depth': round(depth, 3),
-                'velocity': round(velocity, 3)
+                'velocity': round(velocity, 3),
+                'critical_depth': round(hydraulic_results.get('critical_depth', 0), 3),
+                'froude': round(hydraulic_results.get('froude', 0), 3),
+                'regime': hydraulic_results.get('regime', 'N/A')
             },
             'maps': maps
         }

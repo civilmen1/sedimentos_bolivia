@@ -144,6 +144,25 @@
       </div>
     </section>
 
+    <!-- HEC-RAS Hydraulic Results (Dynamic) -->
+    <section id="hec_results" class="hidden grid md:grid-cols-3 gap-6 animate-in">
+      <div class="bg-slate-800 text-white p-6 rounded-2xl shadow-lg">
+        <div class="text-xs text-slate-400 uppercase font-bold mb-1">Tirante Crítico (y_c)</div>
+        <div class="text-2xl font-mono" id="res_yc">--</div>
+        <div class="text-[10px] text-blue-400 mt-2">Mínima Energía Específica</div>
+      </div>
+      <div class="bg-slate-800 text-white p-6 rounded-2xl shadow-lg">
+        <div class="text-xs text-slate-400 uppercase font-bold mb-1">Número de Froude (Fr)</div>
+        <div class="text-2xl font-mono" id="res_fr">--</div>
+        <div class="text-[10px] text-blue-400 mt-2" id="res_regime">--</div>
+      </div>
+      <div class="bg-slate-800 text-white p-6 rounded-2xl shadow-lg">
+        <div class="text-xs text-slate-400 uppercase font-bold mb-1">Metodología Solver</div>
+        <div class="text-lg font-bold">Newton-Raphson</div>
+        <div class="text-[10px] text-emerald-400 mt-2">Iterativo Estilo HEC-RAS</div>
+      </div>
+    </section>
+
     <!-- Transport Results -->
     <section class="grid md:grid-cols-3 gap-6 animate-in">
       <div class="bg-white p-6 rounded-2xl shadow-lg border-t-4 border-slate-800">
@@ -268,6 +287,13 @@ async function calculateAll() {
     if (payload.use_downscaling) {
         document.getElementById('depth').value = data.hydraulic.depth;
         document.getElementById('velocity').value = data.hydraulic.velocity;
+
+        document.getElementById('res_yc').innerText = data.hydraulic.critical_depth + " m";
+        document.getElementById('res_fr').innerText = data.hydraulic.froude;
+        document.getElementById('res_regime').innerText = "Régimen " + data.hydraulic.regime;
+        document.getElementById('hec_results').classList.remove('hidden');
+    } else {
+        document.getElementById('hec_results').classList.add('hidden');
     }
 
     document.getElementById('results').classList.remove('hidden');
