@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Informe de Transporte de Sedimentos</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 40px; }
+        h1, h2, h3 { color: #1e3a8a; }
+        .header { text-align: center; border-bottom: 2px solid #1e3a8a; padding-bottom: 20px; margin-bottom: 30px; }
+        .section { margin-bottom: 25px; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f8fafc; }
+        .footer { margin-top: 50px; font-size: 0.8em; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+        @media print {
+            .no-print { display: none; }
+            body { padding: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>INFORME TÉCNICO DE TRANSPORTE DE SEDIMENTOS</h1>
+        <p>Generado automáticamente mediante GEE + Python</p>
+        <p>Basado en: Ramirez Quispe (2021)</p>
+    </div>
+
+    <div class="section">
+        <h2>1. Información del Proyecto</h2>
+        <table>
+            <tr><th>Ubicación (Lat, Lon)</th><td>{{ results.lat }}, {{ results.lon }}</td></tr>
+            <tr><th>Diámetro Medio (d₅₀)</th><td>{{ results.d50 }} mm</td></tr>
+            <tr><th>Tirante y (m)</th><td>{{ results.depth }} m</td></tr>
+            <tr><th>Velocidad v (m/s)</th><td>{{ results.velocity }} m/s</td></tr>
+            <tr><th>Temperatura del Agua</th><td>{{ results.temp }} °C</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>2. Propiedades Físicas y de la Partícula</h2>
+        <table>
+            <tr><th>Densidad del Agua (ρ_w)</th><td>{{ results.rho_w }} kg/m³</td></tr>
+            <tr><th>Viscosidad Cinemática (ν)</th><td>{{ results.nu }} m²/s</td></tr>
+            <tr><th>Velocidad de Caída (wₛ)</th><td>{{ results.ws }} m/s</td></tr>
+            <tr><th>Parámetro D*</th><td>{{ results.dstar }}</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>3. Variables Geomorfológicas (GEE)</h2>
+        <table>
+            <tr><th>Pendiente del Lecho (S)</th><td>{{ results.slope }} m/m</td></tr>
+            <tr><th>Uso de Suelo (ESA WorldCover)</th><td>{{ results.landcover }}</td></tr>
+            <tr><th>Índice de Turbidez (NDTI)</th><td>{{ results.ndti }}</td></tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>4. Estimación de Transporte de Sedimentos</h2>
+        <table>
+            <thead>
+                <tr><th>Modelo</th><th>Tipo de Carga</th><th>Tasa (kg/m*s)</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Meyer-Peter & Müller</td><td>Carga de fondo</td><td>{{ results.transport.meyer_peter_muller }}</td></tr>
+                <tr><td>Engelund-Hansen</td><td>Carga total</td><td>{{ results.transport.engelund_hansen }}</td></tr>
+                <tr><td>Van Rijn</td><td>Carga de fondo</td><td>{{ results.transport.van_rijn }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="footer">
+        <p>Este informe es un producto de análisis preliminar basado en datos satelitales.</p>
+        <p>© 2024 - Sistema de Cálculo de Sedimentos</p>
+    </div>
+
+    <div class="no-print" style="margin-top: 30px; text-align: center;">
+        <button onclick="window.print()" style="padding: 10px 20px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer;">Imprimir Informe</button>
+    </div>
+</body>
+</html>
