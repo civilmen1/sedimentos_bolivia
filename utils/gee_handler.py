@@ -75,6 +75,26 @@ def get_landcover_at_point(lat, lon):
     ).getInfo()
     return val.get('Map', 'Unknown')
 
+def get_manning_n_from_lc(lc_class):
+    """
+    Mapping ESA WorldCover classes to estimated Manning's n.
+    Source: Chow (1959) estimates for similar land covers.
+    """
+    # 10: Trees, 20: Shrubland, 30: Grassland, 40: Cropland, 50: Built-up,
+    # 60: Bare/sparse vegetation, 70: Snow/ice, 80: Permanent water,
+    # 90: Herbaceous wetland, 95: Mangroves, 100: Moss and lichen
+    mapping = {
+        10: 0.080, # Densely wooded
+        20: 0.050, # Shrubland
+        30: 0.035, # Grassland
+        40: 0.040, # Cropland
+        50: 0.015, # Concrete/Urban
+        60: 0.030, # Bare soil
+        80: 0.025, # Clean water channel
+        90: 0.060, # Wetland
+    }
+    return mapping.get(lc_class, 0.035) # Default to 0.035
+
 def get_ndti_turbidity(lat, lon):
     """
     Estimates NDTI (Normalized Difference Turbidity Index) using Sentinel-2.

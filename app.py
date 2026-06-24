@@ -9,20 +9,22 @@ from models.sediment import (
     calculate_critical_shear_stress_shields,
     meyer_peter_muller,
     engelund_hansen,
-    van_rijn_bedload
+    van_rijn_bedload,
+    calculate_hydraulic_downscaling
 )
 from utils.gee_handler import (
     initialize_gee,
     get_slope_from_dem,
     get_map_url,
     get_landcover_at_point,
+    get_manning_n_from_lc,
     get_ndti_turbidity
 )
 
 app = Flask(__name__)
 
 # Initialize GEE at startup
-initialize_gee()
+gee_available = initialize_gee()
 
 @app.route('/')
 def index():
@@ -39,14 +41,32 @@ def calculate():
         rho_s = float(data.get('rho_s', 2650))
         temp = float(data.get('temp', 20))
 
-        # Hydraulic variables (optional/default)
-        depth = float(data.get('depth', 1.0))
-        velocity = float(data.get('velocity', 1.0))
-
         # 1. Fetch data from GEE
-        slope = get_slope_from_dem(lat, lon)
-        landcover = get_landcover_at_point(lat, lon)
-        ndti = get_ndti_turbidity(lat, lon)
+        if gee_available:
+            try:
+                slope = get_slope_from_dem(lat, lon)
+                landcover = get_landcover_at_point(lat, lon)
+                ndti = get_ndti_turbidity(lat, lon)
+            except Exception as gee_err:
+                print(f"GEE Fetch error (using fallbacks): {gee_err}")
+                slope = 0.005
+                landcover = 80 # Water
+                ndti = 0.0
+        else:
+            print("GEE not available, using fallbacks")
+            slope = 0.005
+            landcover = 80 # Water
+            ndti = 0.0
+
+        # Hydraulic variables
+        if data.get('use_downscaling'):
+            q = float(data.get('q', 10.0))
+            b = float(data.get('b', 5.0))
+            n_manning = get_manning_n_from_lc(landcover)
+            depth, velocity = calculate_hydraulic_downscaling(q, b, slope, n_manning)
+        else:
+            depth = float(data.get('depth', 1.0))
+            velocity = float(data.get('velocity', 1.0))
 
         # 2. Calculate physical properties
         rho_w = calculate_water_density(temp)
@@ -64,10 +84,16 @@ def calculate():
         qb_vr = van_rijn_bedload(velocity, depth, d50_mm, dstar, s, rho_w, nu)
 
         # 5. Map URLs
-        maps = {
-            'slope': get_map_url(lat, lon, 'slope'),
-            'landcover': get_map_url(lat, lon, 'landcover')
-        }
+        if gee_available:
+            try:
+                maps = {
+                    'slope': get_map_url(lat, lon, 'slope'),
+                    'landcover': get_map_url(lat, lon, 'landcover')
+                }
+            except:
+                maps = {'slope': '', 'landcover': ''}
+        else:
+            maps = {'slope': '', 'landcover': ''}
 
         results = {
             'physical': {
@@ -91,12 +117,18 @@ def calculate():
                 'engelund_hansen': round(qt_eh, 4),
                 'van_rijn': round(qb_vr, 4)
             },
+            'hydraulic': {
+                'depth': round(depth, 3),
+                'velocity': round(velocity, 3)
+            },
             'maps': maps
         }
 
         return jsonify(results)
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 400
 
 @app.route('/report')

@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.optimize import fsolve
 
 def calculate_water_density(temp_c):
     """
@@ -114,3 +115,33 @@ def van_rijn_bedload(v, depth, d50_mm, dstar, s, rho_w, nu, g=9.807):
         qb_vol = 0.053 * ((s - 1) * g)**0.5 * d50_m**1.5 * t**2.1 / dstar**0.3
         return qb_vol * s * rho_w
     return 0.0
+
+def solve_manning_y(q, b, s, n):
+    """
+    Solves for normal depth (y) in a rectangular channel using Manning's equation.
+    Q = (1/n) * A * R^(2/3) * S^(1/2)
+    """
+    if s <= 0:
+        return 0.1 # Fallback
+
+    def func(y):
+        if y <= 0: return -q
+        a = b * y
+        p = b + 2 * y
+        r = a / p
+        return (1/n) * a * (r**(2/3)) * (s**0.5) - q
+
+    # Initial guess: assume wide channel (R approx y)
+    # q = (1/n) * b * y * y^(2/3) * s^0.5 => y^(5/3) = (q * n) / (b * s^0.5)
+    y_guess = ((q * n) / (b * s**0.5))**(3/5)
+
+    y_sol = fsolve(func, y_guess)
+    return float(y_sol[0])
+
+def calculate_hydraulic_downscaling(q, b, s, n):
+    """
+    Downscaling analysis to calculate y and v from Q, B, S, n.
+    """
+    y = solve_manning_y(q, b, s, n)
+    v = q / (b * y) if y > 0 else 0
+    return y, v

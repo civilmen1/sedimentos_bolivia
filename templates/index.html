@@ -72,12 +72,38 @@
         <input type="number" id="phi" value="37" class="w-full bg-white border border-amber-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-amber-500 outline-none">
       </div>
 
+      <!-- Downscaling Hidráulico (Opcional) -->
+      <div class="lg:col-span-4 bg-slate-800 rounded-xl p-6 mb-4 text-white">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="font-bold flex items-center gap-2">
+            <span class="bg-blue-500 p-1 rounded text-xs">NEW</span>
+            Análisis de Downscaling (Manning)
+          </h3>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="useDownscaling" class="sr-only peer">
+            <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            <span class="ml-3 text-sm font-medium">Usar estimación GEE + Q</span>
+          </label>
+        </div>
+        <div class="grid md:grid-cols-2 gap-4" id="downscalingInputs" style="opacity: 0.5; pointer-events: none;">
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Caudal Q (m³/s)</label>
+            <input type="number" id="q_input" value="10.0" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white outline-none focus:border-blue-400">
+          </div>
+          <div>
+            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">Ancho Solera B (m)</label>
+            <input type="number" id="b_input" value="5.0" class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white outline-none focus:border-blue-400">
+          </div>
+        </div>
+        <p class="text-[10px] text-slate-400 mt-3">※ Al activar, el tirante y velocidad se calcularán usando la pendiente de GEE y la rugosidad n estimada según el uso de suelo.</p>
+      </div>
+
       <!-- Datos Hidráulicos de Campo -->
-      <div class="input-group bg-blue-50 p-4 rounded-xl border border-blue-200">
+      <div class="input-group bg-blue-50 p-4 rounded-xl border border-blue-200" id="group_y">
         <label class="block text-xs font-bold text-blue-700 uppercase mb-2">Tirante y (m)</label>
         <input type="number" id="depth" step="0.01" value="1.0" class="w-full bg-white border border-blue-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
       </div>
-      <div class="input-group bg-blue-50 p-4 rounded-xl border border-blue-200">
+      <div class="input-group bg-blue-50 p-4 rounded-xl border border-blue-200" id="group_v">
         <label class="block text-xs font-bold text-blue-700 uppercase mb-2">Velocidad v (m/s)</label>
         <input type="number" id="velocity" step="0.01" value="1.0" class="w-full bg-white border border-blue-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
       </div>
@@ -175,6 +201,29 @@
 </footer>
 
 <script>
+// Toggle Downscaling inputs
+document.getElementById('useDownscaling').addEventListener('change', function(e) {
+  const container = document.getElementById('downscalingInputs');
+  const manualY = document.getElementById('depth');
+  const manualV = document.getElementById('velocity');
+
+  if (e.target.checked) {
+    container.style.opacity = "1";
+    container.style.pointerEvents = "auto";
+    manualY.disabled = true;
+    manualV.disabled = true;
+    document.getElementById('group_y').style.opacity = "0.5";
+    document.getElementById('group_v').style.opacity = "0.5";
+  } else {
+    container.style.opacity = "0.5";
+    container.style.pointerEvents = "none";
+    manualY.disabled = false;
+    manualV.disabled = false;
+    document.getElementById('group_y').style.opacity = "1";
+    document.getElementById('group_v').style.opacity = "1";
+  }
+});
+
 async function calculateAll() {
   const btn = document.getElementById('calcBtn');
   btn.disabled = true;
@@ -190,6 +239,10 @@ async function calculateAll() {
     temp: document.getElementById('temp').value,
     depth: document.getElementById('depth').value,
     velocity: document.getElementById('velocity').value,
+    // Downscaling params
+    use_downscaling: document.getElementById('useDownscaling').checked,
+    q: document.getElementById('q_input').value,
+    b: document.getElementById('b_input').value
   };
 
   try {
@@ -210,6 +263,12 @@ async function calculateAll() {
     document.getElementById('res_mpm').innerText = data.transport.meyer_peter_muller;
     document.getElementById('res_eh').innerText = data.transport.engelund_hansen;
     document.getElementById('res_vr').innerText = data.transport.van_rijn;
+
+    // Update Y and V if they were calculated
+    if (payload.use_downscaling) {
+        document.getElementById('depth').value = data.hydraulic.depth;
+        document.getElementById('velocity').value = data.hydraulic.velocity;
+    }
 
     document.getElementById('results').classList.remove('hidden');
     generateMaps(payload.lat, payload.lon, payload.d50, data.particle.ws, data.gee.slope, data.particle.dstar, data.maps);
