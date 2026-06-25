@@ -1,0 +1,10 @@
+GEE Initialization failed: Please authorize access to your Earth Engine account by running
+
+earthengine authenticate
+
+in your command line, or ee.Authenticate() in Python, and then retry.
+ * Serving Flask app 'app'
+ * Debug mode: on
+Address already in use
+Port 5000 is in use by another program. Either identify and stop that program, or start the server with a different port.
+127.0.0.1 - - [25/Jun/2026 03:24:14] "GET /report?lat=-12.0464&lon=-77.0428&d50=0.45&depth=1.0&velocity=1.0&temp=20 HTTP/1.1" 200 -

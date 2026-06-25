@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, make_response
 import numpy as np
 from models.sediment import (
     calculate_water_density,
@@ -18,6 +18,7 @@ from utils.gee_handler import (
     get_landcover_at_point,
     get_ndti_turbidity
 )
+from utils.pdf_utils import create_pdf
 
 app = Flask(__name__)
 
@@ -99,52 +100,74 @@ def calculate():
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
+def get_report_results(args):
+    lat = float(args.get('lat', -12.0464))
+    lon = float(args.get('lon', -77.0428))
+    d50 = float(args.get('d50', 0.45))
+    depth = float(args.get('depth', 1.0))
+    velocity = float(args.get('velocity', 1.0))
+    temp = float(args.get('temp', 20))
+
+    # Calculate for report
+    rho_w = calculate_water_density(temp)
+    nu = calculate_kinematic_viscosity(temp)
+    s = 2.65
+    ws = calculate_fall_velocity(d50, s, nu)
+    dstar = calculate_dimensionless_particle_parameter(d50, s, nu)
+
+    # Try to get GEE data for report (simplified for now)
+    try:
+        slope = get_slope_from_dem(lat, lon)
+        landcover = get_landcover_at_point(lat, lon)
+        ndti = get_ndti_turbidity(lat, lon)
+    except:
+        slope, landcover, ndti = 0.005, "Unknown", 0.0
+
+    qb_mpm = meyer_peter_muller(s, d50, slope, depth, rho_w)
+    qt_eh = engelund_hansen(velocity, depth, slope, d50, s, rho_w)
+    qb_vr = van_rijn_bedload(velocity, depth, d50, dstar, s, rho_w, nu)
+
+    return {
+        'lat': lat, 'lon': lon, 'd50': d50, 'temp': temp,
+        'depth': depth, 'velocity': velocity,
+        'rho_w': round(rho_w, 2),
+        'nu': f"{nu:.3e}",
+        'ws': round(ws, 5),
+        'dstar': round(dstar, 2),
+        'slope': round(slope, 6),
+        'landcover': landcover,
+        'ndti': round(ndti, 4),
+        'transport': {
+            'meyer_peter_muller': round(qb_mpm, 4),
+            'engelund_hansen': round(qt_eh, 4),
+            'van_rijn': round(qb_vr, 4)
+        }
+    }
+
 @app.route('/report')
 def report():
     try:
-        lat = float(request.args.get('lat', -12.0464))
-        lon = float(request.args.get('lon', -77.0428))
-        d50 = float(request.args.get('d50', 0.45))
-        depth = float(request.args.get('depth', 1.0))
-        velocity = float(request.args.get('velocity', 1.0))
-        temp = float(request.args.get('temp', 20))
+        results = get_report_results(request.args)
+        return render_template('report.html', results=results, is_pdf=False)
+    except Exception as e:
+        return str(e), 400
 
-        # Calculate for report
-        rho_w = calculate_water_density(temp)
-        nu = calculate_kinematic_viscosity(temp)
-        s = 2.65
-        ws = calculate_fall_velocity(d50, s, nu)
-        dstar = calculate_dimensionless_particle_parameter(d50, s, nu)
+@app.route('/download_report')
+def download_report():
+    try:
+        results = get_report_results(request.args)
 
-        # Try to get GEE data for report (simplified for now)
-        try:
-            slope = get_slope_from_dem(lat, lon)
-            landcover = get_landcover_at_point(lat, lon)
-            ndti = get_ndti_turbidity(lat, lon)
-        except:
-            slope, landcover, ndti = 0.005, "Unknown", 0.0
+        html = render_template('report.html', results=results, is_pdf=True)
+        pdf = create_pdf(html)
 
-        qb_mpm = meyer_peter_muller(s, d50, slope, depth, rho_w)
-        qt_eh = engelund_hansen(velocity, depth, slope, d50, s, rho_w)
-        qb_vr = van_rijn_bedload(velocity, depth, d50, dstar, s, rho_w, nu)
+        if pdf:
+            response = make_response(pdf)
+            response.headers['Content-Type'] = 'application/pdf'
+            response.headers['Content-Disposition'] = f"attachment; filename=informe_sedimentos_{results['lat']}_{results['lon']}.pdf"
+            return response
+        else:
+            return "Error generating PDF", 500
 
-        results = {
-            'lat': lat, 'lon': lon, 'd50': d50, 'temp': temp,
-            'depth': depth, 'velocity': velocity,
-            'rho_w': round(rho_w, 2),
-            'nu': f"{nu:.3e}",
-            'ws': round(ws, 5),
-            'dstar': round(dstar, 2),
-            'slope': round(slope, 6),
-            'landcover': landcover,
-            'ndti': round(ndti, 4),
-            'transport': {
-                'meyer_peter_muller': round(qb_mpm, 4),
-                'engelund_hansen': round(qt_eh, 4),
-                'van_rijn': round(qb_vr, 4)
-            }
-        }
-        return render_template('report.html', results=results)
     except Exception as e:
         return str(e), 400
 
