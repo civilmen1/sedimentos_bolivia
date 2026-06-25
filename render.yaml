@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: sedimentos-bolivia
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 2 --bind 0.0.0.0:$PORT --timeout 120
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+      - key: WEB_CONCURRENCY
+        value: "2"

@@ -3,319 +3,720 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Calculadora de Transporte de Sedimentos | GEE + Campo</title>
+<title>Transporte de Sedimentos — Bolivia | Herramienta Técnica</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<link href="https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-400-normal.woff2" rel="preload" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   body { font-family: 'Inter', system-ui, sans-serif; }
-  .glass { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); }
-  .input-group { transition: all 0.3s ease; }
-  .input-group:focus-within { transform: translateY(-2px); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); }
-  .map-card { transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
-  .map-card:hover { transform: translateY(-5px) scale(1.02); }
-  .gradient-text { background: linear-gradient(135deg, #1e40af, #059669); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-  .animate-in { animation: fadeIn 0.6s ease-out forwards; }
+  .mono { font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace; }
+  #map { height: 400px; }
+  @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
+  .anim { animation: fadeUp 0.45s ease-out forwards; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .bar-fill { transition: width 1s cubic-bezier(.4,0,.2,1); }
 </style>
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen">
 
-<!-- Header -->
-<header class="bg-gradient-to-r from-blue-900 via-blue-800 to-emerald-900 text-white py-12 px-6 shadow-xl">
+<!-- ══════ HEADER ══════ -->
+<header class="bg-gradient-to-br from-blue-950 via-blue-900 to-teal-900 text-white px-6 py-10 shadow-2xl">
   <div class="max-w-7xl mx-auto">
-    <div class="flex items-center gap-3 mb-4">
-      <span class="bg-white/20 px-3 py-1 rounded-full text-xs font-bold tracking-wider">HERRAMIENTA TÉCNICA</span>
-      <span class="bg-amber-500/90 px-3 py-1 rounded-full text-xs font-bold">RAMIREZ QUISPE 2021</span>
+    <div class="flex flex-wrap items-start justify-between gap-4">
+      <div>
+        <div class="flex flex-wrap gap-2 mb-4">
+          <span class="bg-white/20 text-xs font-bold px-3 py-1 rounded-full tracking-wider">INGENIERÍA HIDRÁULICA</span>
+          <span class="bg-amber-400 text-amber-950 text-xs font-bold px-3 py-1 rounded-full">RAMIREZ QUISPE 2021</span>
+          {% if gee_available %}
+          <span class="bg-emerald-400 text-emerald-950 text-xs font-bold px-3 py-1 rounded-full">● GEE ACTIVO</span>
+          {% else %}
+          <span class="bg-slate-500 text-slate-100 text-xs font-bold px-3 py-1 rounded-full">○ MODO MANUAL</span>
+          {% endif %}
+        </div>
+        <h1 class="text-3xl md:text-4xl font-bold leading-tight">
+          Calculadora de Transporte<br>
+          <span class="text-teal-300">de Sedimentos — Bolivia</span>
+        </h1>
+        <p class="text-blue-200 mt-3 max-w-2xl text-sm leading-relaxed">
+          Modelos <strong class="text-white">Meyer-Peter &amp; Müller (1948)</strong>,
+          <strong class="text-white">Engelund-Hansen (1967)</strong> y
+          <strong class="text-white">Van Rijn (1984)</strong>.
+          Criterio de Shields · Número de Rouse · Análisis de sensibilidad.
+        </p>
+      </div>
+      <div class="hidden xl:block bg-white/10 backdrop-blur rounded-xl p-4 text-xs border border-white/20">
+        <div class="font-bold text-teal-300 mb-2 text-sm">Clasificación de Sedimentos</div>
+        <table class="text-blue-100 mono leading-6">
+          <tr><td class="pr-3 text-slate-300">d₅₀ &lt; 0.0625 mm</td><td class="text-orange-300">Limo / Arcilla</td></tr>
+          <tr><td class="pr-3 text-slate-300">d₅₀ 0.0625 – 2 mm</td><td class="text-yellow-300">Arena (fina/media/gruesa)</td></tr>
+          <tr><td class="pr-3 text-slate-300">d₅₀ 2 – 64 mm</td><td class="text-slate-300">Grava (fina/gruesa)</td></tr>
+          <tr><td class="pr-3 text-slate-300">d₅₀ &gt; 64 mm</td><td class="text-blue-300">Canto rodado</td></tr>
+        </table>
+      </div>
     </div>
-    <h1 class="text-4xl md:text-5xl font-bold mb-4">Cálculo de Variables Hidráulicas<br><span class="text-emerald-300">Integración GEE + Datos de Campo</span></h1>
-    <p class="text-blue-100 max-w-3xl text-lg">Ingrese los datos granulométricos y geográficos obligatorios. El sistema calculará automáticamente wₛ, y generará el listado de mapas descriptivos necesarios para su informe técnico.</p>
   </div>
 </header>
 
-<main class="max-w-7xl mx-auto px-6 py-12 -mt-8">
+<!-- ══════ MAIN ══════ -->
+<main class="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
-  <!-- Input Section -->
-  <section class="glass rounded-2xl shadow-2xl p-8 mb-12 border border-white/50 animate-in">
-    <h2 class="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-3">
-      <span class="bg-blue-600 text-white w-10 h-10 rounded-lg flex items-center justify-center text-xl">📍</span>
-      Datos de Ingreso Obligatorios
-    </h2>
+  <!-- INPUT + MAP -->
+  <div class="grid lg:grid-cols-5 gap-6 mb-8">
 
-    <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-      <!-- Ubicación -->
-      <div class="input-group bg-slate-50 p-4 rounded-xl border border-slate-200">
-        <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Latitud (WGS84)</label>
-        <input type="number" id="lat" step="0.000001" value="-12.0464" class="w-full bg-white border border-slate-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
-      </div>
-      <div class="input-group bg-slate-50 p-4 rounded-xl border border-slate-200">
-        <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Longitud (WGS84)</label>
-        <input type="number" id="lon" step="0.000001" value="-77.0428" class="w-full bg-white border border-slate-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
-      </div>
+    <!-- ── FORM ── -->
+    <div class="lg:col-span-2">
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+        <h2 class="font-bold text-slate-900 mb-5 flex items-center gap-2">
+          <span class="bg-blue-600 text-white w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold">Σ</span>
+          Parámetros de Entrada
+        </h2>
 
-      <!-- Granulometría -->
-      <div class="input-group bg-emerald-50 p-4 rounded-xl border border-emerald-200">
-        <label class="block text-xs font-bold text-emerald-700 uppercase mb-2">Diámetro d₅₀ (mm)</label>
-        <input type="number" id="d50" step="0.001" value="0.45" class="w-full bg-white border border-emerald-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-emerald-500 outline-none">
-      </div>
-      <div class="input-group bg-emerald-50 p-4 rounded-xl border border-emerald-200">
-        <label class="block text-xs font-bold text-emerald-700 uppercase mb-2">Diámetro d₉₀ (mm)</label>
-        <input type="number" id="d90" step="0.001" value="1.20" class="w-full bg-white border border-emerald-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-emerald-500 outline-none">
-      </div>
+        <!-- Location -->
+        <fieldset class="border border-blue-200 rounded-xl p-4 bg-blue-50/40 mb-4">
+          <legend class="text-xs font-bold text-blue-700 uppercase px-1">Ubicación WGS84</legend>
+          <div class="grid grid-cols-2 gap-3 mt-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Latitud (°)</label>
+              <input type="number" id="lat" value="-16.5000" step="0.000001"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Longitud (°)</label>
+              <input type="number" id="lon" value="-68.1500" step="0.000001"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+            </div>
+          </div>
+          <p class="text-xs text-blue-500 mt-2">↙ Haga clic en el mapa para fijar la ubicación</p>
+        </fieldset>
 
-      <!-- Propiedades Físicas -->
-      <div class="input-group bg-amber-50 p-4 rounded-xl border border-amber-200">
-        <label class="block text-xs font-bold text-amber-700 uppercase mb-2">Densidad Sólido ρₛ (kg/m³)</label>
-        <input type="number" id="rho_s" value="2650" class="w-full bg-white border border-amber-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-amber-500 outline-none">
-      </div>
-      <div class="input-group bg-amber-50 p-4 rounded-xl border border-amber-200">
-        <label class="block text-xs font-bold text-amber-700 uppercase mb-2">Ángulo Reposo φ (°)</label>
-        <input type="number" id="phi" value="37" class="w-full bg-white border border-amber-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-amber-500 outline-none">
-      </div>
+        <!-- Granulometry -->
+        <fieldset class="border border-emerald-200 rounded-xl p-4 bg-emerald-50/40 mb-4">
+          <legend class="text-xs font-bold text-emerald-700 uppercase px-1">Granulometría</legend>
+          <div class="grid grid-cols-2 gap-3 mt-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">d₅₀ (mm)</label>
+              <input type="number" id="d50" value="0.45" step="0.001" min="0.001"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">d₉₀ (mm)</label>
+              <input type="number" id="d90" value="1.20" step="0.001" min="0.001"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+            </div>
+          </div>
+          <div id="particleBadge" class="mt-2 text-xs font-semibold"></div>
+        </fieldset>
 
-      <!-- Datos Hidráulicos de Campo -->
-      <div class="input-group bg-blue-50 p-4 rounded-xl border border-blue-200">
-        <label class="block text-xs font-bold text-blue-700 uppercase mb-2">Tirante y (m)</label>
-        <input type="number" id="depth" step="0.01" value="1.0" class="w-full bg-white border border-blue-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
-      </div>
-      <div class="input-group bg-blue-50 p-4 rounded-xl border border-blue-200">
-        <label class="block text-xs font-bold text-blue-700 uppercase mb-2">Velocidad v (m/s)</label>
-        <input type="number" id="velocity" step="0.01" value="1.0" class="w-full bg-white border border-blue-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
-      </div>
+        <!-- Physical -->
+        <fieldset class="border border-amber-200 rounded-xl p-4 bg-amber-50/40 mb-4">
+          <legend class="text-xs font-bold text-amber-700 uppercase px-1">Propiedades Físicas</legend>
+          <div class="grid grid-cols-2 gap-3 mt-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">ρₛ sólido (kg/m³)</label>
+              <input type="number" id="rho_s" value="2650" step="1"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Temperatura (°C)</label>
+              <input type="number" id="temp" value="20" step="0.5" min="0" max="50"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+          </div>
+        </fieldset>
 
-      <!-- Temperatura -->
-      <div class="input-group bg-slate-50 p-4 rounded-xl border border-slate-200">
-        <label class="block text-xs font-bold text-slate-500 uppercase mb-2">Temp. Agua T (°C)</label>
-        <input type="number" id="temp" value="20" class="w-full bg-white border border-slate-300 rounded-lg px-4 py-3 font-mono text-lg focus:ring-2 focus:ring-blue-500 outline-none">
-      </div>
+        <!-- Hydraulic -->
+        <fieldset class="border border-sky-200 rounded-xl p-4 bg-sky-50/40 mb-4">
+          <legend class="text-xs font-bold text-sky-700 uppercase px-1">Datos Hidráulicos de Campo</legend>
+          <div class="grid grid-cols-2 gap-3 mt-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Tirante y (m)</label>
+              <input type="number" id="depth" value="1.00" step="0.01" min="0.01"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Velocidad v (m/s)</label>
+              <input type="number" id="velocity" value="1.00" step="0.01" min="0.01"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 outline-none bg-white">
+            </div>
+          </div>
+        </fieldset>
 
-      <div class="flex items-end lg:col-span-1">
-        <button id="calcBtn" onclick="calculateAll()" class="w-full bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white font-bold py-4 rounded-xl shadow-lg transform transition active:scale-95">
-          CALCULAR Y GENERAR MAPAS
+        <!-- Slope -->
+        <fieldset class="border border-violet-200 rounded-xl p-4 bg-violet-50/40 mb-5">
+          <legend class="text-xs font-bold text-violet-700 uppercase px-1">Pendiente del Lecho</legend>
+          <div class="grid grid-cols-2 gap-3 mt-2">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">S (m/m)</label>
+              <input type="number" id="slope" value="0.00500" step="0.00001" min="0.000001"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-violet-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">S (%)</label>
+              <input type="number" id="slope_pct" value="0.500" step="0.001"
+                class="w-full mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-500" readonly>
+            </div>
+          </div>
+          {% if gee_available %}
+          <button type="button" onclick="fetchGEEData()"
+            class="mt-3 w-full text-xs bg-violet-100 hover:bg-violet-200 text-violet-800 font-semibold py-2 rounded-lg transition">
+            🛰 Obtener pendiente desde GEE (SRTM)
+          </button>
+          {% endif %}
+        </fieldset>
+
+        <!-- Calculate button -->
+        <button id="calcBtn" onclick="calculateAll()"
+          class="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700
+                 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all duration-200
+                 flex items-center justify-center gap-2 text-sm">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0120 9.414V19a2 2 0 01-2 2z"/>
+          </svg>
+          CALCULAR TRANSPORTE DE SEDIMENTOS
         </button>
       </div>
     </div>
-  </section>
 
-  <!-- Results Dashboard -->
-  <div id="results" class="hidden space-y-8">
-
-    <!-- Calculated Values -->
-    <section class="grid md:grid-cols-3 gap-6 animate-in">
-      <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-emerald-500">
-        <div class="text-sm text-slate-500 mb-1">Velocidad de Caída (wₛ)</div>
-        <div class="text-3xl font-bold text-slate-900" id="res_ws">--</div>
-        <div class="text-xs text-emerald-600 mt-2 font-mono">Cap. 1.2.11 | Van Rijn 1993</div>
-      </div>
-      <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-blue-500">
-        <div class="text-sm text-slate-500 mb-1">Viscosidad Cinemática (ν)</div>
-        <div class="text-3xl font-bold text-slate-900" id="res_nu">--</div>
-        <div class="text-xs text-blue-600 mt-2 font-mono">Cap. 1.1 | Eq. 1.1.3</div>
-      </div>
-      <div class="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-amber-500">
-        <div class="text-sm text-slate-500 mb-1">Parámetro D*</div>
-        <div class="text-3xl font-bold text-slate-900" id="res_dstar">--</div>
-        <div class="text-xs text-amber-600 mt-2 font-mono">Cap. 2.4 | Shields</div>
-      </div>
-    </section>
-
-    <!-- Transport Results -->
-    <section class="grid md:grid-cols-3 gap-6 animate-in">
-      <div class="bg-white p-6 rounded-2xl shadow-lg border-t-4 border-slate-800">
-        <div class="text-sm text-slate-500 mb-1">Meyer-Peter & Müller</div>
-        <div class="text-2xl font-bold text-slate-900" id="res_mpm">--</div>
-        <div class="text-xs text-slate-500 mt-2">Carga de fondo [kg/m*s]</div>
-      </div>
-      <div class="bg-white p-6 rounded-2xl shadow-lg border-t-4 border-slate-800">
-        <div class="text-sm text-slate-500 mb-1">Engelund-Hansen</div>
-        <div class="text-2xl font-bold text-slate-900" id="res_eh">--</div>
-        <div class="text-xs text-slate-500 mt-2">Carga total [kg/m*s]</div>
-      </div>
-      <div class="bg-white p-6 rounded-2xl shadow-lg border-t-4 border-slate-800">
-        <div class="text-sm text-slate-500 mb-1">Van Rijn</div>
-        <div class="text-2xl font-bold text-slate-900" id="res_vr">--</div>
-        <div class="text-xs text-slate-500 mt-2">Carga de fondo [kg/m*s]</div>
-      </div>
-    </section>
-
-    <!-- Map List Generator -->
-    <section class="animate-in">
-      <div class="flex items-center justify-between mb-6">
-        <h2 class="text-3xl font-bold text-slate-900">Listado de Mapas Descriptivos a Generar</h2>
-        <span class="bg-slate-200 px-4 py-2 rounded-full text-sm font-bold text-slate-700">Formato Informe Técnico</span>
-      </div>
-
-      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6" id="mapContainer">
-        <!-- Maps will be injected here via JS -->
-      </div>
-    </section>
-
-    <!-- Technical Note -->
-    <div class="bg-blue-900 text-white p-8 rounded-2xl shadow-xl animate-in">
-      <h3 class="text-xl font-bold mb-4 flex items-center gap-2">
-        <span>⚠️</span> Nota sobre Tirante (y) y Velocidad (v)
-      </h3>
-      <p class="text-blue-100 leading-relaxed">
-        Aunque GEE proporciona geometría del cauce (B) y pendiente (S), el <strong>tirante normal (y)</strong> y la <strong>velocidad media (v)</strong> son variables de estado que dependen del caudal instantáneo.
-        Para un informe autorizado, estos valores deben provenir de <strong>aforos en campo</strong> o limnímetros instalados.
-        Los mapas generados abajo usarán los datos satelitales como base espacial, pero las curvas de gasto deben calibrarse con sus datos de entrada.
-      </p>
-      <div class="mt-6">
-          <button onclick="generateReportLink()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition">
-            GENERAR INFORME TÉCNICO COMPLETO
-          </button>
+    <!-- ── MAP ── -->
+    <div class="lg:col-span-3">
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
+        <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <span class="font-semibold text-slate-700 text-sm">Ubicación en el Mapa</span>
+          <span class="text-xs text-slate-400 mono" id="mapCoords">-16.5000°, -68.1500°</span>
+        </div>
+        <div id="map" class="flex-1"></div>
+        <div class="px-4 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-400 flex gap-2 items-center">
+          <svg class="w-4 h-4 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/>
+          </svg>
+          Haga clic en el mapa o arrastre el marcador para seleccionar el punto de muestreo
+        </div>
       </div>
     </div>
   </div>
 
+  <!-- ══════ RESULTS (oculto hasta calcular) ══════ -->
+  <div id="results" class="hidden space-y-6">
+
+    <!-- Status ribbon -->
+    <div id="statusBar" class="rounded-xl p-4 border anim flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div class="flex items-center gap-2">
+        <div id="mobilityDot" class="w-2.5 h-2.5 rounded-full"></div>
+        <span id="mobilityText" class="font-bold text-sm"></span>
+      </div>
+      <div class="text-slate-300">|</div>
+      <div class="text-sm">Modo: <span id="transportMode" class="font-semibold text-blue-700"></span></div>
+      <div class="text-slate-300">|</div>
+      <div class="text-sm">Sedimento: <span id="sedType" class="font-semibold"></span></div>
+      <div class="ml-auto text-xs text-slate-400" id="geeTag"></div>
+    </div>
+
+    <!-- Properties cards -->
+    <div class="grid md:grid-cols-3 gap-4 anim">
+      <!-- Fluid -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5 hover:-translate-y-0.5 transition">
+        <div class="text-xs font-bold text-blue-600 uppercase mb-3 pb-2 border-b border-slate-100">
+          Propiedades del Fluido
+        </div>
+        <div class="space-y-2.5">
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">ρ<sub>w</sub> densidad agua</span>
+            <span class="mono text-sm font-semibold" id="r_rho_w">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">ν viscosidad cinemática</span>
+            <span class="mono text-sm font-semibold" id="r_nu">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">s gravedad específica</span>
+            <span class="mono text-sm font-semibold" id="r_s">--</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Particle -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5 hover:-translate-y-0.5 transition">
+        <div class="text-xs font-bold text-emerald-600 uppercase mb-3 pb-2 border-b border-slate-100">
+          Parámetros de Partícula
+        </div>
+        <div class="space-y-2.5">
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">wₛ vel. de caída (Van Rijn)</span>
+            <span class="mono text-sm font-semibold" id="r_ws">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">D* parámetro adim.</span>
+            <span class="mono text-sm font-semibold" id="r_dstar">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">τ<sub>c</sub> esfuerzo crítico</span>
+            <span class="mono text-sm font-semibold" id="r_tau_c">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">θ<sub>c</sub> Shields crítico</span>
+            <span class="mono text-sm font-semibold" id="r_theta_c">--</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hydraulic state -->
+      <div class="bg-white rounded-xl border border-slate-200 p-5 hover:-translate-y-0.5 transition">
+        <div class="text-xs font-bold text-sky-600 uppercase mb-3 pb-2 border-b border-slate-100">
+          Estado Hidráulico
+        </div>
+        <div class="space-y-2.5">
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">τ₀ esfuerzo de fondo</span>
+            <span class="mono text-sm font-semibold" id="r_tau0">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">θ₀ Shields actuante</span>
+            <span class="mono text-sm font-semibold" id="r_theta0">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">u* vel. de corte</span>
+            <span class="mono text-sm font-semibold" id="r_ustar">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">Fr Número de Froude</span>
+            <span class="mono text-sm font-semibold" id="r_froude">--</span>
+          </div>
+          <div class="flex justify-between">
+            <span class="text-sm text-slate-500">Z Número de Rouse</span>
+            <span class="mono text-sm font-semibold" id="r_rouse">--</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shields mobility bar -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 anim">
+      <div class="text-xs font-bold text-slate-600 uppercase mb-4">Criterio de Shields — Movilidad del Sedimento</div>
+      <div class="relative mb-1">
+        <div class="h-7 bg-gradient-to-r from-green-100 via-yellow-200 to-red-300 rounded-full relative overflow-visible">
+          <!-- Critical threshold marker -->
+          <div id="shieldsCritLine" class="absolute top-0 h-full w-0.5 bg-orange-600 z-10" style="left:50%">
+            <div id="shieldsCritLabel"
+              class="absolute -top-6 left-1 text-xs font-bold text-orange-600 whitespace-nowrap bg-white px-1 rounded">
+              θc=?
+            </div>
+          </div>
+          <!-- Current state marker -->
+          <div id="shieldsCurrMarker"
+            class="absolute top-0.5 bottom-0.5 w-1.5 bg-blue-600 rounded-full z-20 shadow transition-all duration-700"
+            style="left:30%">
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-between text-xs text-slate-500 mb-3">
+        <span class="text-green-700 font-semibold">✓ Sin movimiento</span>
+        <span class="text-red-600 font-semibold">⚡ Transporte activo</span>
+      </div>
+      <div class="text-xs text-slate-500 mono">
+        θ₀ = <span class="font-bold" id="s_theta0">--</span> &nbsp;|&nbsp;
+        θ_c = <span class="font-bold" id="s_thetac">--</span> &nbsp;|&nbsp;
+        Ratio θ₀/θ_c = <span class="font-bold" id="s_ratio">--</span>x
+      </div>
+    </div>
+
+    <!-- Chart + Model Cards -->
+    <div class="grid lg:grid-cols-2 gap-6 anim">
+      <div class="bg-white rounded-xl border border-slate-200 p-5">
+        <div class="text-xs font-bold text-slate-600 uppercase mb-4">Comparación de Modelos [kg/(m·s)]</div>
+        <canvas id="transportChart"></canvas>
+      </div>
+
+      <div class="space-y-3">
+        <div class="bg-white rounded-xl border border-slate-200 border-l-4 border-l-blue-600 p-5 hover:-translate-y-0.5 transition">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="font-bold text-sm text-slate-900">Meyer-Peter &amp; Müller (1948)</div>
+              <div class="text-xs text-blue-600 mono mt-0.5">Carga de fondo — θc = 0.047</div>
+            </div>
+            <div class="text-right">
+              <div class="text-2xl font-bold text-slate-900 mono" id="r_mpm">--</div>
+              <div class="text-xs text-slate-400">kg/(m·s)</div>
+            </div>
+          </div>
+          <div class="text-xs text-slate-400 mono bg-slate-50 rounded px-2 py-1">
+            q_b = 8·(θ−0.047)^1.5 · √[(s−1)·g·d³₅₀]
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 border-l-4 border-l-emerald-600 p-5 hover:-translate-y-0.5 transition">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="font-bold text-sm text-slate-900">Engelund-Hansen (1967)</div>
+              <div class="text-xs text-emerald-600 mono mt-0.5">Carga total</div>
+            </div>
+            <div class="text-right">
+              <div class="text-2xl font-bold text-slate-900 mono" id="r_eh">--</div>
+              <div class="text-xs text-slate-400">kg/(m·s)</div>
+            </div>
+          </div>
+          <div class="text-xs text-slate-400 mono bg-slate-50 rounded px-2 py-1">
+            q_t = (0.1/f) · θ^2.5 · √[(s−1)·g·d³₅₀]
+          </div>
+        </div>
+
+        <div class="bg-white rounded-xl border border-slate-200 border-l-4 border-l-violet-600 p-5 hover:-translate-y-0.5 transition">
+          <div class="flex justify-between items-start mb-2">
+            <div>
+              <div class="font-bold text-sm text-slate-900">Van Rijn (1984)</div>
+              <div class="text-xs text-violet-600 mono mt-0.5">Carga de fondo — parámetro T</div>
+            </div>
+            <div class="text-right">
+              <div class="text-2xl font-bold text-slate-900 mono" id="r_vr">--</div>
+              <div class="text-xs text-slate-400">kg/(m·s)</div>
+            </div>
+          </div>
+          <div class="text-xs text-slate-400 mono bg-slate-50 rounded px-2 py-1">
+            q_b = 0.053/D*^0.3 · T^2.1 · √[(s−1)·g·d³₅₀]
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sensitivity table -->
+    <div class="bg-white rounded-xl border border-slate-200 p-5 anim">
+      <div class="flex items-center justify-between mb-4">
+        <div class="text-xs font-bold text-slate-600 uppercase">Análisis de Sensibilidad — Transporte vs Tirante</div>
+        <span class="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">v y S constantes</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b-2 border-slate-200">
+              <th class="text-left py-2 px-2 text-slate-500 font-semibold text-xs">Tirante y (m)</th>
+              <th class="text-right py-2 px-2 text-blue-600 font-semibold text-xs">MPM [kg/(m·s)]</th>
+              <th class="text-right py-2 px-2 text-emerald-600 font-semibold text-xs">E-H [kg/(m·s)]</th>
+              <th class="text-right py-2 px-2 text-violet-600 font-semibold text-xs">VR [kg/(m·s)]</th>
+            </tr>
+          </thead>
+          <tbody id="sensTbody" class="divide-y divide-slate-50"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- GEE maps (shown only when GEE active) -->
+    <div id="geeSection" class="hidden bg-white rounded-xl border border-slate-200 p-5 anim">
+      <div class="text-xs font-bold text-slate-600 uppercase mb-4">Datos Geoespaciales — Google Earth Engine</div>
+      <div class="grid md:grid-cols-3 gap-4 mb-4">
+        <div class="bg-violet-50 rounded-lg p-3 border border-violet-100">
+          <div class="text-xs font-bold text-violet-700 mb-1">Pendiente SRTM</div>
+          <div class="mono text-sm font-bold" id="gee_slope">--</div>
+        </div>
+        <div class="bg-green-50 rounded-lg p-3 border border-green-100">
+          <div class="text-xs font-bold text-green-700 mb-1">Cobertura ESA WorldCover</div>
+          <div class="text-sm font-bold" id="gee_lc">--</div>
+        </div>
+        <div class="bg-amber-50 rounded-lg p-3 border border-amber-100">
+          <div class="text-xs font-bold text-amber-700 mb-1">NDTI Turbidez (Sentinel-2)</div>
+          <div class="mono text-sm font-bold" id="gee_ndti">--</div>
+        </div>
+      </div>
+      <div class="grid md:grid-cols-2 gap-4" id="geeMaps"></div>
+    </div>
+
+    <!-- Technical note + Report button -->
+    <div class="bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl p-6 anim">
+      <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <div class="font-bold text-white mb-1 flex items-center gap-2">
+            <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0120 9.414V19a2 2 0 01-2 2z"/>
+            </svg>
+            Informe Técnico Completo
+          </div>
+          <div class="text-sm text-slate-400">
+            Nota: el tirante y la velocidad deben provenir de <strong class="text-slate-300">aforos en campo</strong>
+            o limnímetros. Los mapas GEE proporcionan el contexto espacial; calibre las curvas de gasto con datos medidos.
+          </div>
+        </div>
+        <button onclick="generateReport()"
+          class="shrink-0 bg-teal-500 hover:bg-teal-400 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg whitespace-nowrap text-sm">
+          🖨 GENERAR INFORME PDF
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /results -->
 </main>
 
-<footer class="bg-slate-900 text-slate-400 py-8 mt-12 text-center text-sm">
-  <p>Basado en "Transporte de Sedimentos con Python - Tomo 1" | Ing. Robert Ramirez Quispe (2021)</p>
-  <p class="mt-2 opacity-60">Generador de especificaciones técnicas para Google Earth Engine</p>
+<footer class="bg-slate-900 text-slate-500 py-6 mt-12">
+  <div class="max-w-4xl mx-auto px-4 text-center text-xs space-y-1">
+    <div class="font-semibold text-slate-400">Calculadora de Transporte de Sedimentos — Bolivia</div>
+    <div>Ramirez Quispe (2021) · Meyer-Peter &amp; Müller (1948) · Engelund-Hansen (1967) · Van Rijn (1984)</div>
+    <div>Criterio de Shields · Número de Rouse · Integración Google Earth Engine</div>
+  </div>
 </footer>
 
+<!-- ══════ SCRIPTS ══════ -->
 <script>
-async function calculateAll() {
-  const btn = document.getElementById('calcBtn');
-  btn.disabled = true;
-  btn.innerText = 'PROCESANDO EN GEE...';
+// ── LEAFLET MAP ──────────────────────────────────────────────────────────────
+const map = L.map('map', { center: [-16.5, -64.5], zoom: 5 });
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  maxZoom: 18
+}).addTo(map);
 
-  // Get inputs
-  const payload = {
-    lat: document.getElementById('lat').value,
-    lon: document.getElementById('lon').value,
-    d50: document.getElementById('d50').value,
-    d90: document.getElementById('d90').value,
-    rho_s: document.getElementById('rho_s').value,
-    temp: document.getElementById('temp').value,
-    depth: document.getElementById('depth').value,
-    velocity: document.getElementById('velocity').value,
-  };
+const marker = L.marker([-16.5, -68.15], { draggable: true }).addTo(map);
 
+function updateCoords(lat, lng) {
+  document.getElementById('lat').value = lat.toFixed(6);
+  document.getElementById('lon').value = lng.toFixed(6);
+  document.getElementById('mapCoords').textContent = `${lat.toFixed(4)}°, ${lng.toFixed(4)}°`;
+}
+
+map.on('click', e => { marker.setLatLng(e.latlng); updateCoords(e.latlng.lat, e.latlng.lng); });
+marker.on('dragend', e => { const ll = e.target.getLatLng(); updateCoords(ll.lat, ll.lng); });
+
+// ── SLOPE SYNC ───────────────────────────────────────────────────────────────
+document.getElementById('slope').addEventListener('input', function() {
+  const v = parseFloat(this.value) || 0;
+  document.getElementById('slope_pct').value = (v * 100).toFixed(4);
+});
+
+// ── PARTICLE PREVIEW ─────────────────────────────────────────────────────────
+const PARTICLES = [
+  [0.004, 'Arcilla', '#c0392b'],
+  [0.0625, 'Limo', '#e67e22'],
+  [0.25, 'Arena fina', '#f1c40f'],
+  [0.5, 'Arena media', '#f39c12'],
+  [2.0, 'Arena gruesa', '#d35400'],
+  [16, 'Grava fina', '#7f8c8d'],
+  [64, 'Grava gruesa', '#566573'],
+  [Infinity, 'Canto rodado', '#2c3e50'],
+];
+function classifyParticle(d50) {
+  for (const [lim, label, color] of PARTICLES) if (d50 < lim) return [label, color];
+  return ['Canto rodado', '#2c3e50'];
+}
+document.getElementById('d50').addEventListener('input', function() {
+  const d50 = parseFloat(this.value);
+  if (d50 > 0) {
+    const [label, color] = classifyParticle(d50);
+    document.getElementById('particleBadge').innerHTML =
+      `<span style="color:${color}">▶ ${label}</span>`;
+  }
+});
+document.getElementById('d50').dispatchEvent(new Event('input'));
+document.getElementById('slope').dispatchEvent(new Event('input'));
+
+// ── CHART ────────────────────────────────────────────────────────────────────
+let chart = null;
+function renderChart(mpm, eh, vr) {
+  const ctx = document.getElementById('transportChart').getContext('2d');
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['Meyer-Peter\n& Müller', 'Engelund-\nHansen', 'Van Rijn'],
+      datasets: [{
+        data: [mpm, eh, vr],
+        backgroundColor: ['rgba(37,99,235,.8)', 'rgba(5,150,105,.8)', 'rgba(124,58,237,.8)'],
+        borderColor: ['#2563eb', '#059669', '#7c3aed'],
+        borderWidth: 2,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => ` ${c.raw.toExponential(3)} kg/(m·s)` } }
+      },
+      scales: {
+        x: {
+          title: { display: true, text: 'kg/(m·s)', color: '#94a3b8', font: { size: 11 } },
+          grid: { color: 'rgba(0,0,0,0.05)' }
+        },
+        y: { grid: { display: false } }
+      }
+    }
+  });
+}
+
+// ── GEE SLOPE FETCH ──────────────────────────────────────────────────────────
+async function fetchGEEData() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lon = parseFloat(document.getElementById('lon').value);
   try {
-    const response = await fetch('/calculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+    const resp = await fetch('/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon, d50: 0.5, depth: 1, velocity: 1, use_gee: true })
     });
-
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-
-    // Update UI
-    document.getElementById('res_ws').innerText = data.particle.ws + " m/s";
-    document.getElementById('res_nu').innerText = data.physical.nu + " m²/s";
-    document.getElementById('res_dstar').innerText = data.particle.dstar;
-
-    document.getElementById('res_mpm').innerText = data.transport.meyer_peter_muller;
-    document.getElementById('res_eh').innerText = data.transport.engelund_hansen;
-    document.getElementById('res_vr').innerText = data.transport.van_rijn;
-
-    document.getElementById('results').classList.remove('hidden');
-    generateMaps(payload.lat, payload.lon, payload.d50, data.particle.ws, data.gee.slope, data.particle.dstar, data.maps);
-
-  } catch (err) {
-    alert("Error: " + err.message);
-  } finally {
-    btn.disabled = false;
-    btn.innerText = 'CALCULAR Y GENERAR MAPAS';
+    const data = await resp.json();
+    if (data.gee && data.gee.slope != null) {
+      const s = data.gee.slope;
+      document.getElementById('slope').value = s.toFixed(8);
+      document.getElementById('slope_pct').value = (s * 100).toFixed(4);
+      alert(`Pendiente GEE (SRTM): ${s} m/m (${data.gee.slope_pct}%)\nCobertura: ${data.gee.landcover}`);
+    }
+  } catch (e) {
+    alert('Error al consultar GEE: ' + e.message);
   }
 }
 
-function generateReportLink() {
-  const params = new URLSearchParams({
-    lat: document.getElementById('lat').value,
-    lon: document.getElementById('lon').value,
-    d50: document.getElementById('d50').value,
-    depth: document.getElementById('depth').value,
+// ── MAIN CALCULATE ───────────────────────────────────────────────────────────
+async function calculateAll() {
+  const btn = document.getElementById('calcBtn');
+  btn.disabled = true;
+  btn.innerHTML = `<svg class="w-5 h-5 spin" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+  </svg> CALCULANDO...`;
+
+  const payload = {
+    lat:      document.getElementById('lat').value,
+    lon:      document.getElementById('lon').value,
+    d50:      document.getElementById('d50').value,
+    d90:      document.getElementById('d90').value,
+    rho_s:    document.getElementById('rho_s').value,
+    temp:     document.getElementById('temp').value,
+    depth:    document.getElementById('depth').value,
     velocity: document.getElementById('velocity').value,
-    temp: document.getElementById('temp').value
-  });
-  window.open('/report?' + params.toString(), '_blank');
+    slope:    document.getElementById('slope').value,
+    use_gee:  false,
+  };
+
+  try {
+    const resp = await fetch('/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    renderResults(d, payload);
+    document.getElementById('results').classList.remove('hidden');
+    setTimeout(() => document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+  } catch (err) {
+    alert('Error: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0120 9.414V19a2 2 0 01-2 2z"/>
+    </svg> CALCULAR TRANSPORTE DE SEDIMENTOS`;
+  }
 }
 
-function generateMaps(lat, lon, d50, ws, slope, dstar, mapUrls) {
-  const container = document.getElementById('mapContainer');
-  container.innerHTML = '';
+// ── RENDER RESULTS ───────────────────────────────────────────────────────────
+function renderResults(d, payload) {
+  const isMobile = d.hydraulic.mobile;
+  const bar = document.getElementById('statusBar');
+  bar.className = `rounded-xl p-4 border anim flex flex-wrap items-center gap-x-4 gap-y-2 ${
+    isMobile ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`;
+  document.getElementById('mobilityDot').className = `w-2.5 h-2.5 rounded-full ${isMobile ? 'bg-red-500' : 'bg-green-500'}`;
+  document.getElementById('mobilityText').innerHTML = isMobile
+    ? '<span class="text-red-700">⚡ SEDIMENTO EN MOVIMIENTO (θ₀ &gt; θ_c)</span>'
+    : '<span class="text-green-700">✓ SIN MOVIMIENTO (θ₀ &lt; θ_c)</span>';
+  document.getElementById('transportMode').textContent = d.hydraulic.transport_mode;
+  const [sl, sc] = classifyParticle(parseFloat(payload.d50));
+  document.getElementById('sedType').innerHTML = `<span style="color:${sc}">${sl}</span>`;
+  document.getElementById('geeTag').textContent = d.gee.gee_active ? '🛰 GEE activo' : '⚙ Modo manual';
 
-  const maps = [
-    {
-      title: "Mapa Base Geomorfológico",
-      desc: "Delimitación de cuenca, red hidrográfica y perfil longitudinal del tramo en estudio.",
-      source: "SRTM 30m / ALOS PALSAR",
-      cap: "Cap. 2-7",
-      color: "border-blue-500",
-      icon: "🏔️",
-      url: mapUrls.slope
-    },
-    {
-      title: "Mapa de Pendiente del Lecho (S)",
-      desc: `Pendiente local calculada: ${(slope*100).toFixed(4)}%. Insumo crítico para τ₀.`,
-      source: "Copernicus DEM / HydroSHEDS",
-      cap: "Ec. 2.1.1",
-      color: "border-emerald-500",
-      icon: "📐",
-      url: mapUrls.slope
-    },
-    {
-      title: "Mapa de Cobertura y Uso de Suelo",
-      desc: "Identificación de fuentes de sedimento, coeficientes de rugosidad n (Manning) y erosión potencial.",
-      source: "Sentinel-2 / MODIS Land Cover",
-      cap: "Cap. 3-4",
-      color: "border-green-500",
-      icon: "🌱",
-      url: mapUrls.landcover
-    },
-    {
-      title: "Mapa de Concentración de Sedimentos (CSS)",
-      desc: `Estimación de turbidez proxy mediante NDTI. Validar con wₛ calculado: ${ws.toFixed(4)} m/s.`,
-      source: "Landsat 8-9 / Sentinel-2 SR",
-      cap: "Cap. 6",
-      color: "border-amber-500",
-      icon: "🟤",
-      url: mapUrls.slope // Placeholder
-    },
-    {
-      title: "Mapa de Zonas de Riesgo de Movilidad",
-      desc: `Clasificación según parámetro D*=${dstar} y criterio de Shields/Zanke.`,
-      source: "Procesamiento GEE + Python",
-      cap: "Cap. 2.3-2.5",
-      color: "border-red-500",
-      icon: "⚡",
-      url: mapUrls.slope // Placeholder
-    },
-    {
-      title: "Mapa de Formas de Fondo Estimadas",
-      desc: `Predicción de rizos/dunas basado en d₅₀=${d50}mm y régimen de flujo (Van Rijn 1984).`,
-      source: "Modelo Integrado GEE",
-      cap: "Cap. 3.6",
-      color: "border-purple-500",
-      icon: "🌊",
-      url: mapUrls.slope // Placeholder
+  // Physical
+  document.getElementById('r_rho_w').textContent = d.physical.rho_w + ' kg/m³';
+  document.getElementById('r_nu').textContent    = d.physical.nu + ' m²/s';
+  document.getElementById('r_s').textContent     = d.physical.s;
+
+  // Particle
+  document.getElementById('r_ws').textContent    = d.particle.ws + ' m/s';
+  document.getElementById('r_dstar').textContent = d.particle.dstar + ' (adim.)';
+  document.getElementById('r_tau_c').textContent = d.particle.tau_c + ' Pa';
+  document.getElementById('r_theta_c').textContent = d.particle.theta_c;
+
+  // Hydraulic
+  document.getElementById('r_tau0').textContent  = d.hydraulic.tau_0 + ' Pa';
+  document.getElementById('r_theta0').textContent = d.hydraulic.theta_0;
+  document.getElementById('r_ustar').textContent = d.hydraulic.u_star + ' m/s';
+  const fr = d.hydraulic.froude;
+  document.getElementById('r_froude').textContent = fr + (fr < 1 ? ' (subcrítico)' : ' (supercrítico)');
+  document.getElementById('r_rouse').textContent = d.hydraulic.z_rouse;
+
+  // Shields diagram
+  const tc  = d.particle.theta_c;
+  const t0  = d.hydraulic.theta_0;
+  const max = Math.max(t0, tc) * 1.6 || 0.1;
+  const crit_pct = Math.min((tc / max) * 100, 95);
+  const curr_pct = Math.min((t0 / max) * 100, 97);
+  document.getElementById('shieldsCritLine').style.left = crit_pct + '%';
+  document.getElementById('shieldsCurrMarker').style.left = curr_pct + '%';
+  document.getElementById('shieldsCritLabel').textContent = `θc=${tc}`;
+  document.getElementById('s_theta0').textContent  = t0;
+  document.getElementById('s_thetac').textContent  = tc;
+  document.getElementById('s_ratio').textContent   = tc > 0 ? (t0 / tc).toFixed(2) : '∞';
+
+  // Transport values
+  const mpm = d.transport.meyer_peter_muller;
+  const eh  = d.transport.engelund_hansen;
+  const vr  = d.transport.van_rijn;
+  document.getElementById('r_mpm').textContent = mpm.toExponential(3);
+  document.getElementById('r_eh').textContent  = eh.toExponential(3);
+  document.getElementById('r_vr').textContent  = vr.toExponential(3);
+  renderChart(mpm, eh, vr);
+
+  // Sensitivity table
+  const inputDepth = parseFloat(payload.depth);
+  const tbody = document.getElementById('sensTbody');
+  tbody.innerHTML = d.sensitivity.map(row => {
+    const highlight = Math.abs(row.depth - inputDepth) < 0.01;
+    return `<tr class="${highlight ? 'bg-blue-50 font-semibold' : 'hover:bg-slate-50'}">
+      <td class="py-2 px-2 mono text-slate-700">${row.depth.toFixed(2)}</td>
+      <td class="py-2 px-2 text-right mono text-blue-700">${row.mpm.toExponential(3)}</td>
+      <td class="py-2 px-2 text-right mono text-emerald-700">${row.eh.toExponential(3)}</td>
+      <td class="py-2 px-2 text-right mono text-violet-700">${row.vr.toExponential(3)}</td>
+    </tr>`;
+  }).join('');
+
+  // GEE section
+  if (d.gee.gee_active) {
+    document.getElementById('geeSection').classList.remove('hidden');
+    document.getElementById('gee_slope').textContent = `${d.gee.slope} m/m (${d.gee.slope_pct}%)`;
+    document.getElementById('gee_lc').textContent    = d.gee.landcover;
+    document.getElementById('gee_ndti').textContent  = d.gee.ndti;
+    const mapsDiv = document.getElementById('geeMaps');
+    mapsDiv.innerHTML = '';
+    if (d.maps.slope) {
+      mapsDiv.innerHTML += `<div>
+        <div class="text-xs text-slate-500 mb-2 font-semibold">Pendiente SRTM (GEE)</div>
+        <img src="${d.maps.slope}" class="w-full rounded-lg border border-slate-200" alt="Mapa de pendiente">
+      </div>`;
     }
-  ];
+    if (d.maps.landcover) {
+      mapsDiv.innerHTML += `<div>
+        <div class="text-xs text-slate-500 mb-2 font-semibold">Cobertura ESA WorldCover</div>
+        <img src="${d.maps.landcover}" class="w-full rounded-lg border border-slate-200" alt="Cobertura terrestre">
+      </div>`;
+    }
+  } else {
+    document.getElementById('geeSection').classList.add('hidden');
+  }
+}
 
-  maps.forEach((map, index) => {
-    const card = document.createElement('div');
-    card.className = `map-card bg-white rounded-xl overflow-hidden shadow-md border-t-4 ${map.color}`;
-    card.style.animationDelay = `${index * 0.1}s`;
-    card.innerHTML = `
-      <div class="p-6">
-        <div class="flex justify-between items-start mb-4">
-          <span class="text-4xl">${map.icon}</span>
-          <span class="text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-600">${map.cap}</span>
-        </div>
-        <h3 class="text-lg font-bold text-slate-900 mb-2">${map.title}</h3>
-        <p class="text-sm text-slate-600 mb-4 leading-relaxed">${map.desc}</p>
-        ${map.url ? `<img src="${map.url}" class="w-full h-32 object-cover rounded mb-4 bg-slate-100" alt="GEE Map">` : ''}
-        <div class="pt-4 border-t border-slate-100">
-          <div class="text-xs font-bold text-slate-400 uppercase">Fuente de Datos</div>
-          <div class="text-sm font-mono text-slate-700 mt-1">${map.source}</div>
-        </div>
-      </div>
-    `;
-    container.appendChild(card);
+// ── REPORT ───────────────────────────────────────────────────────────────────
+function generateReport() {
+  const p = new URLSearchParams({
+    lat:      document.getElementById('lat').value,
+    lon:      document.getElementById('lon').value,
+    d50:      document.getElementById('d50').value,
+    d90:      document.getElementById('d90').value,
+    rho_s:    document.getElementById('rho_s').value,
+    depth:    document.getElementById('depth').value,
+    velocity: document.getElementById('velocity').value,
+    temp:     document.getElementById('temp').value,
+    slope:    document.getElementById('slope').value,
   });
+  window.open('/report?' + p.toString(), '_blank');
 }
 </script>
 </body>

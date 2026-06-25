@@ -1,4 +1,5 @@
 import ee
+import math
 
 def initialize_gee():
     """
@@ -28,9 +29,9 @@ def get_slope_from_dem(lat, lon, buffer_m=100):
         scale=30
     ).getInfo()
 
-    # Slope is in degrees, convert to m/m
+    # Slope is in degrees, convert to m/m using tan()
     slope_deg = stats.get('slope', 0)
-    slope_m_m = (slope_deg * 3.14159 / 180.0) # tan(theta) approx theta for small angles
+    slope_m_m = math.tan(slope_deg * math.pi / 180.0)
     return slope_m_m
 
 def get_map_url(lat, lon, layer_type='slope', zoom=15):
