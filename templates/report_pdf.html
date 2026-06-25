@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Informe Técnico — Transporte de Sedimentos y Morfología Fluvial</title>
+<style>
+@page {
+  size: letter;
+  margin: 1in;
+  @top-left  { content: "TRANSPORTE DE SEDIMENTOS — BOLIVIA"; font-family: "Liberation Serif","Times New Roman",serif; font-size: 10pt; }
+  @top-right { content: counter(page); font-family: "Liberation Serif","Times New Roman",serif; font-size: 10pt; }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Liberation Serif", "Times New Roman", Times, Georgia, serif;
+  font-size: 12pt;
+  line-height: 2.0;
+  text-align: justify;
+  color: #000;
+  background: white;
+}
+p { text-indent: 0.5in; margin-bottom: 0; }
+p.no-indent { text-indent: 0; }
+h1 { font-size: 12pt; font-weight: bold; text-align: center; page-break-after: avoid; margin-top: 1.5em; }
+h2 { font-size: 12pt; font-weight: bold; text-align: left; page-break-after: avoid; margin-top: 1em; }
+h3 { font-size: 12pt; font-style: italic; font-weight: bold; text-align: left; page-break-after: avoid; margin-top: 0.5em; }
+ul, ol { margin-left: 0.75in; }
+li { text-align: left; }
+.title-block { text-align: center; margin-bottom: 1em; }
+.doc-title { font-size: 12pt; font-weight: bold; text-align: center; margin-top: 3em; }
+.eq { text-align: center; text-indent: 0; margin: 0.4em 0; font-style: italic; }
+/* Tables */
+table { border-collapse: collapse; width: 100%; margin: 0.5em 0; font-size: 11pt; page-break-inside: avoid; }
+thead th { border-top: 2px solid #000; border-bottom: 1px solid #000; padding: 3pt 6pt; text-align: left; font-weight: bold; }
+tbody td { padding: 2pt 6pt; }
+tbody tr:last-child td { border-bottom: 2px solid #000; }
+td.td-num { text-align: right; }
+.tbl-title { font-weight: bold; }
+.tbl-caption { font-style: italic; text-indent: 0; }
+.tbl-note { font-size: 10pt; text-indent: 0; margin-top: 2pt; }
+/* Figures */
+figure { margin: 1em 0 0.25em; text-align: center; page-break-inside: avoid; }
+figure img { max-width: 6.5in; height: auto; }
+figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt; line-height: 1.6; }
+/* References */
+.apa-ref { text-indent: -0.5in; padding-left: 0.5in; margin-bottom: 0; }
+.page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ PORTADA ═══════════════════ -->
+<div class="title-block">
+  <p class="no-indent" style="font-weight:bold; text-transform:uppercase;">Cabecera abreviada: TRANSPORTE DE SEDIMENTOS — BOLIVIA</p>
+</div>
+
+<p class="no-indent doc-title">Informe Técnico: Transporte de Sedimentos y Morfología Fluvial</p>
+<p class="no-indent doc-title">Cuenca Hidrográfica de Bolivia</p>
+<br><br>
+<p class="no-indent" style="text-align:center;">Calculadora de Transporte de Sedimentos</p>
+<p class="no-indent" style="text-align:center;">Ramirez Quispe (2021) — <em>Transporte de Sedimentos con Python – Tomo 1</em></p>
+<p class="no-indent" style="text-align:center;">{{ results.date }}</p>
+<p class="no-indent" style="text-align:center;">Punto: {{ results.lat }}°, {{ results.lon }}°</p>
+
+<!-- ═══════════════════ RESUMEN ═══════════════════ -->
+<div class="page-break"></div>
+<h1>Resumen</h1>
+<p>El presente informe técnico analiza el transporte de sedimentos y la morfología fluvial para el punto de muestreo ubicado en las coordenadas {{ results.lat }}°, {{ results.lon }}°, con d₅₀ = {{ results.d50 }} mm y d₉₀ = {{ results.d90 }} mm. Se aplican las fórmulas de Meyer-Peter y Müller (1948), Engelund-Hansen (1967) y Van Rijn (1984) para estimar la carga de fondo y la carga total bajo un tirante de {{ results.depth }} m, velocidad de {{ results.velocity }} m/s y pendiente S = {{ results.slope }} m/m. El material del lecho se clasifica como {{ results.classification }} según Wentworth (1922) y el cauce corresponde al tipo {{ results.rosgen_type }} en la clasificación de Rosgen (1994). El parámetro de Shields calculado (θ₀ = {{ results.theta_0 }}) resulta {% if results.mobile %}superior{% else %}inferior{% endif %} al umbral crítico (θ_c = {{ results.theta_c }}), indicando {% if results.mobile %}movilidad activa del lecho{% else %}estabilidad del material de lecho{% endif %}.</p>
+
+<p><em>Palabras clave:</em> transporte de sedimentos, morfología fluvial, Bolivia, Shields, Meyer-Peter y Müller, Engelund-Hansen, Van Rijn.</p>
+
+<!-- ═══════════════════ CAP. 1 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>1. Introducción</h1>
+<p>El transporte de sedimentos en cauces fluviales constituye un proceso fundamental para la gestión del agua, el diseño de obras hidráulicas y la preservación de los ecosistemas riparios. En Bolivia, la diversidad de cuencas —desde las altiplánicas hasta las subandinas y amazónicas— genera una amplia variabilidad en los regímenes sedimentarios que demanda metodologías adaptadas a cada contexto morfológico.</p>
+<p>El presente estudio adopta la metodología descrita por Ramirez Quispe (2021) en <em>Transporte de Sedimentos con Python – Tomo 1</em>, integrando además herramientas de teledetección mediante Google Earth Engine (GEE) para la obtención de parámetros de pendiente, cobertura de suelo e índice de turbidez.</p>
+
+<h2>1.1 Objetivos</h2>
+<p>El objetivo general es cuantificar el transporte de sedimentos mediante fórmulas empíricas de referencia internacional y clasificar morfológicamente el cauce en el punto de muestreo seleccionado.</p>
+
+<h2>1.2 Alcance</h2>
+<p>El análisis abarca la caracterización granulométrica, hidráulica y sedimentológica del punto de muestreo con base en mediciones de campo: d₅₀ = {{ results.d50 }} mm, d₉₀ = {{ results.d90 }} mm, tirante y = {{ results.depth }} m, velocidad V = {{ results.velocity }} m/s, pendiente S = {{ results.slope }} m/m y temperatura T = {{ results.temp }} °C.</p>
+
+<!-- ═══════════════════ CAP. 2 ═══════════════════ -->
+<h1>2. Descripción del Área de Estudio</h1>
+<p>El punto de análisis se localiza en las coordenadas geográficas {{ results.lat }}° de latitud y {{ results.lon }}° de longitud, dentro del territorio boliviano. La pendiente del cauce S = {{ results.slope }} m/m ({{ results.slope_pct }}%) se obtuvo del Modelo Digital de Elevación SRTM (resolución 30 m) procesado en GEE. Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s.</p>
+
+<!-- ═══════════════════ CAP. 3 ═══════════════════ -->
+<h1>3. Morfología del Río</h1>
+<h2>3.1 Clasificación de Rosgen</h2>
+<p>Aplicando la clasificación de Rosgen (1994) con los parámetros de pendiente S = {{ results.slope }} m/m, d₅₀ = {{ results.d50 }} mm y número de Froude Fr = {{ results.froude }}, el cauce se clasifica como tipo <strong>{{ results.rosgen_type }}</strong>: {{ results.rosgen_desc }}.</p>
+
+<p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 1</span></p>
+<p class="no-indent tbl-caption"><em>Clasificación de Rosgen para el punto de muestreo</em></p>
+<table>
+  <thead><tr><th>Parámetro</th><th>Valor calculado</th><th>Tipo Rosgen resultante</th></tr></thead>
+  <tbody>
+    <tr><td>Pendiente S (m/m)</td><td class="td-num">{{ results.slope }}</td><td rowspan="3" style="vertical-align:middle; text-align:center; font-size:28pt; font-weight:bold;">{{ results.rosgen_type }}</td></tr>
+    <tr><td>d₅₀ (mm)</td><td class="td-num">{{ results.d50 }}</td></tr>
+    <tr><td>Número de Froude</td><td class="td-num">{{ results.froude }}</td></tr>
+  </tbody>
+</table>
+
+<!-- ═══════════════════ CAP. 4 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>4. Caracterización del Material del Lecho</h1>
+<h2>4.1 Análisis Granulométrico</h2>
+<p>El material del lecho presenta d₅₀ = {{ results.d50 }} mm y d₉₀ = {{ results.d90 }} mm, con densidad de partícula ρ_s = {{ results.rho_s }} kg/m³ y gravedad específica s = {{ results.s }}. La Figura 1 muestra la curva granulométrica con distribución log-normal ajustada.</p>
+
+{% if results.charts %}
+<figure>
+  <img src="{{ results.charts.grain_size }}" alt="Curva granulométrica">
+  <figcaption><em>Figura 1.</em> Curva granulométrica del material del lecho con distribución log-normal y percentiles d₁₆, d₅₀, d₈₄ y d₉₀. Bandas de clasificación textural según Wentworth (1922). Datos: d₅₀ = {{ results.d50 }} mm, d₉₀ = {{ results.d90 }} mm.</figcaption>
+</figure>
+{% endif %}
+
+<h2>4.2 Clasificación de Partículas</h2>
+<p>De acuerdo con la escala de Wentworth (1922), el material con d₅₀ = {{ results.d50 }} mm corresponde a la clase textural <strong>{{ results.classification }}</strong>. Esta categoría condiciona el mecanismo de transporte predominante y la resistencia al arranque hidráulico.</p>
+
+<p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 2</span></p>
+<p class="no-indent tbl-caption"><em>Clasificación textural Wentworth (1922)</em></p>
+<table>
+  <thead><tr><th>Clase</th><th>Rango d₅₀ (mm)</th><th>Clasificación</th></tr></thead>
+  <tbody>
+    <tr {% if results.d50 < 0.004 %}style="font-weight:bold;background:#fef9c3;"{% endif %}><td>Arcilla</td><td>&lt; 0.004</td><td>Cohesivo</td></tr>
+    <tr {% if 0.004 <= results.d50 < 0.0625 %}style="font-weight:bold;background:#fef9c3;"{% endif %}><td>Limo</td><td>0.004 – 0.0625</td><td>Cohesivo</td></tr>
+    <tr {% if 0.0625 <= results.d50 < 0.5 %}style="font-weight:bold;background:#fef9c3;"{% endif %}><td>Arena fina–media</td><td>0.0625 – 0.5</td><td>No cohesivo</td></tr>
+    <tr {% if 0.5 <= results.d50 < 2.0 %}style="font-weight:bold;background:#fef9c3;"{% endif %}><td>Arena gruesa</td><td>0.5 – 2.0</td><td>No cohesivo</td></tr>
+    <tr {% if 2.0 <= results.d50 < 64 %}style="font-weight:bold;background:#fef9c3;"{% endif %}><td>Grava</td><td>2.0 – 64</td><td>No cohesivo</td></tr>
+    <tr {% if results.d50 >= 64 %}style="font-weight:bold;background:#fef9c3;"{% endif %}><td>Canto / Bloque</td><td>&gt; 64</td><td>No cohesivo</td></tr>
+  </tbody>
+</table>
+<p class="tbl-note no-indent"><strong>Nota.</strong> Fila resaltada: clase del material analizado (d₅₀ = {{ results.d50 }} mm → {{ results.classification }}).</p>
+
+<h2>4.3 Parámetros de Movilidad</h2>
+<h3>4.3.1 Velocidad de Caída</h3>
+<p>La velocidad de caída w_s cuantifica la tendencia de la partícula a sedimentarse. Según Van Rijn (1993), para el régimen intermedio (0.1 &lt; d₅₀ ≤ 1 mm):</p>
+<p class="eq">w_s = (10ν/d₅₀) × [√(1 + 0.01(s-1)g·d₅₀³/ν²) − 1]</p>
+<p>Para las condiciones del estudio: w_s = {{ results.ws }} m/s.</p>
+
+<h3>4.3.2 Parámetro Adimensional D*</h3>
+<p class="eq">D* = [(s-1)g/ν²]^(1/3) × d₅₀  =  {{ results.dstar }}</p>
+
+<h3>4.3.3 Criterio de Shields</h3>
+<p class="eq">θ₀ = τ₀ / [(ρ_s − ρ_w) × g × d₅₀]  =  {{ results.theta_0 }}      (θ_c = {{ results.theta_c }})</p>
+<p>Relación θ₀/θ_c = {{ results.ratio }}. El lecho se encuentra {% if results.mobile %}<strong>en movimiento activo</strong> (θ₀ &gt; θ_c){% else %}<strong>estable</strong> (θ₀ &lt; θ_c){% endif %}. La Figura 2 ilustra la posición del punto calculado en el diagrama de Shields.</p>
+
+{% if results.charts %}
+<figure>
+  <img src="{{ results.charts.shields }}" alt="Diagrama de Shields">
+  <figcaption><em>Figura 2.</em> Diagrama de Shields con curva de umbral de movimiento (Soulsby, 1997). El cuadrado indica el punto calculado (D* = {{ results.dstar }}, θ₀ = {{ results.theta_0 }}) y el triángulo el umbral crítico (θ_c = {{ results.theta_c }}).</figcaption>
+</figure>
+{% endif %}
+
+<!-- ═══════════════════ CAP. 5 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>5. Hidráulica del Cauce</h1>
+<h2>5.1 Condiciones del Flujo</h2>
+<p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 3</span></p>
+<p class="no-indent tbl-caption"><em>Parámetros hidráulicos del sitio de muestreo</em></p>
+<table>
+  <thead><tr><th>Parámetro</th><th>Símbolo</th><th style="text-align:right;">Valor</th><th>Unidades</th></tr></thead>
+  <tbody>
+    <tr><td>Tirante hidráulico</td><td><em>y</em></td><td class="td-num">{{ results.depth }}</td><td>m</td></tr>
+    <tr><td>Velocidad media</td><td><em>V</em></td><td class="td-num">{{ results.velocity }}</td><td>m/s</td></tr>
+    <tr><td>Pendiente del cauce</td><td><em>S</em></td><td class="td-num">{{ results.slope }}</td><td>m/m</td></tr>
+    <tr><td>Densidad del agua</td><td>ρ_w</td><td class="td-num">{{ results.rho_w }}</td><td>kg/m³</td></tr>
+    <tr><td>Viscosidad cinemática</td><td>ν</td><td class="td-num">{{ results.nu }}</td><td>m²/s</td></tr>
+    <tr><td>Número de Froude</td><td><em>Fr</em></td><td class="td-num">{{ results.froude }}</td><td>—</td></tr>
+    <tr><td>Velocidad de fricción</td><td><em>u*</em></td><td class="td-num">{{ results.u_star }}</td><td>m/s</td></tr>
+    <tr><td>Esfuerzo de fondo</td><td>τ₀</td><td class="td-num">{{ results.tau_0 }}</td><td>Pa</td></tr>
+    <tr><td>Esfuerzo crítico</td><td>τ_c</td><td class="td-num">{{ results.tau_c }}</td><td>Pa</td></tr>
+    <tr><td>Manning estimado</td><td><em>n</em></td><td class="td-num">—</td><td>s/m^(1/3)</td></tr>
+  </tbody>
+</table>
+
+<p>El régimen de flujo es <strong>{% if results.froude < 1 %}subcrítico (Fr = {{ results.froude }} &lt; 1){% elif results.froude == 1 %}crítico (Fr = 1){% else %}supercrítico (Fr = {{ results.froude }} &gt; 1){% endif %}</strong>. El esfuerzo de fondo τ₀ = {{ results.tau_0 }} Pa {% if results.mobile %}supera{% else %}no supera{% endif %} al umbral crítico τ_c = {{ results.tau_c }} Pa.</p>
+
+{% if results.charts %}
+<figure>
+  <img src="{{ results.charts.hydraulic_profile }}" alt="Perfil hidráulico">
+  <figcaption><em>Figura 5.</em> Variación de velocidad V (m/s) y esfuerzo de fondo τ₀ (Pa) con el tirante hidráulico y (m), ley Manning V ∝ y²/³. El punto circular indica condiciones de campo: y = {{ results.depth }} m, V = {{ results.velocity }} m/s.</figcaption>
+</figure>
+{% endif %}
+
+<!-- ═══════════════════ CAP. 6 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>6. Transporte de Sedimentos</h1>
+<h2>6.1 Modo de Transporte (Número de Rouse)</h2>
+<p class="eq">Z = w_s / (κ × u*)  =  {{ results.ws }} / (0.41 × {{ results.u_star }})  =  {{ results.z_rouse }}</p>
+<p>El modo predominante de transporte es <strong>{{ results.transport_mode }}</strong> (Z = {{ results.z_rouse }}).</p>
+
+<h2>6.2 Comparación de Modelos</h2>
+<p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 4</span></p>
+<p class="no-indent tbl-caption"><em>Tasas de Transporte de Sedimentos por Modelo</em></p>
+<table>
+  <thead>
+    <tr><th>Modelo</th><th>Año</th><th>Tipo</th><th>Fórmula</th><th style="text-align:right;">q [kg/(m·s)]</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Meyer-Peter y Müller</td><td>1948</td><td>Carga de fondo</td>
+      <td><em>q*_b = 8(θ − θ_c)^1.5</em></td>
+      <td class="td-num">{{ results.transport.meyer_peter_muller }}</td>
+    </tr>
+    <tr>
+      <td>Engelund-Hansen</td><td>1967</td><td>Carga total</td>
+      <td><em>q_t = 0.05U⁵/(C²(s-1)²gd₅₀)</em></td>
+      <td class="td-num">{{ results.transport.engelund_hansen }}</td>
+    </tr>
+    <tr>
+      <td>Van Rijn</td><td>1984</td><td>Carga de fondo</td>
+      <td><em>q_b = 0.053d₅₀^0.3T^2.1/D*^0.3</em></td>
+      <td class="td-num">{{ results.transport.van_rijn }}</td>
+    </tr>
+  </tbody>
+</table>
+<p class="tbl-note no-indent"><strong>Nota.</strong> q en kg por metro de ancho por segundo. MPM y Van Rijn calculan carga de fondo; Engelund-Hansen estima carga total.</p>
+
+{% if results.charts %}
+<figure>
+  <img src="{{ results.charts.transport_compare }}" alt="Comparación de fórmulas de transporte">
+  <figcaption><em>Figura 3.</em> Comparación del caudal sólido unitario q_s calculado con tres modelos. Condiciones: y = {{ results.depth }} m, V = {{ results.velocity }} m/s, S = {{ results.slope }}, d₅₀ = {{ results.d50 }} mm.</figcaption>
+</figure>
+{% endif %}
+
+<!-- ═══════════════════ CAP. 7 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>7. Erosión y Sedimentación</h1>
+<h2>7.1 Balance de Masas (Ecuación de Exner)</h2>
+<p class="eq">∂z_b/∂t + [1/(1−λ_p)] × ∂q_s/∂x = 0</p>
+<p>Donde z_b es la cota del lecho, λ_p ≈ 0.4 (porosidad) y q_s la tasa volumétrica de transporte. La condición de movilidad θ₀/θ_c = {{ results.ratio }} indica {% if results.mobile %}transporte activo con potencial de erosión en el tramo.{% else %}estabilidad del lecho bajo las condiciones registradas.{% endif %}</p>
+
+<h2>7.2 Análisis de Sensibilidad: Tirante vs. Transporte</h2>
+<p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 5</span></p>
+<p class="no-indent tbl-caption"><em>Análisis de Sensibilidad: Tasa de Transporte vs. Tirante Hidráulico</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Tirante y (m)</th>
+      <th style="text-align:right;">MPM [kg/(m·s)]</th>
+      <th style="text-align:right;">E-H [kg/(m·s)]</th>
+      <th style="text-align:right;">Van Rijn [kg/(m·s)]</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in results.sensitivity %}
+    <tr {% if row.depth == results.depth %}style="font-weight:bold;"{% endif %}>
+      <td class="td-num">{{ row.depth }}{% if row.depth == results.depth %} ← campo{% endif %}</td>
+      <td class="td-num">{{ row.mpm }}</td>
+      <td class="td-num">{{ row.eh }}</td>
+      <td class="td-num">{{ row.vr }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="tbl-note no-indent"><strong>Nota.</strong> Valores con d₅₀ = {{ results.d50 }} mm, S = {{ results.slope }}, V = {{ results.velocity }} m/s constante. Fila en negrita = tirante medido en campo.</p>
+
+{% if results.charts %}
+<figure>
+  <img src="{{ results.charts.sensitivity }}" alt="Análisis de sensibilidad">
+  <figcaption><em>Figura 4.</em> Sensibilidad del transporte sólido q_s con el tirante y (m) para las tres fórmulas. Escala logarítmica. Línea punteada: tirante medido (y = {{ results.depth }} m).</figcaption>
+</figure>
+{% endif %}
+
+<!-- ═══════════════════ CAP. 8 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>8. Modelación Hidrosedimentológica</h1>
+<h2>8.1 Google Earth Engine</h2>
+<p>La plataforma GEE permite el análisis satelital de la dinámica sedimentaria mediante Sentinel-2, Landsat 8/9, SRTM y ESA WorldCover. Para el área de estudio se generaron 15 capas GeoTIFF (DEM, red hidrográfica, Manning's n, número de curva CN, índices espectrales NDVI/NDWI/NDTI, zonas de inundación JRC, migración lateral, entre otros) y 4 tablas CSV exportadas a Google Drive (Apéndice E).</p>
+<h2>8.2 Pendiente Satelital</h2>
+<p>S = {{ results.slope }} m/m obtenida del DEM SRTM 30 m mediante ee.Terrain.slope() en GEE, convertida con S = tan(α).</p>
+<h2>8.3 Índice NDTI</h2>
+<p class="eq">NDTI = (ρ_Red − ρ_Green) / (ρ_Red + ρ_Green) = (B4 − B3) / (B4 + B3)</p>
+<p>Valores NDTI &gt; 0.1 indican alta carga de sedimentos en suspensión. La serie temporal Sentinel-2 permite identificar pulsos de turbidez asociados a eventos de crecida.</p>
+
+<!-- ═══════════════════ CAP. 9 ═══════════════════ -->
+<h1>9. Impactos sobre Infraestructura</h1>
+<h2>9.1 Socavación en Puentes</h2>
+<p>Para d₅₀ = {{ results.d50 }} mm y las condiciones hidráulicas registradas, la profundidad de socavación general se estima con la ecuación de Lischtvan-Lebediev (SENAMHI Bolivia) y la socavación local en pilas con HEC-18 (Richardson y Davis, 2001).</p>
+<h2>9.2 Sedimentación en Canales</h2>
+<p>La tasa promedio MPM-VR es q_b = {{ "%.6f"|format((results.transport.meyer_peter_muller + results.transport.van_rijn)/2) }} kg/(m·s). Para un canal de B metros de ancho operando t horas/año, la masa de sedimento depositada = q_b × B × t × 3600 [kg/año].</p>
+<h2>9.3 Colmatación de Embalses</h2>
+<p>La eficiencia de retención se estima con la curva de Brune (1953) en función de la relación capacidad/aportación (C/I). Para Z = {{ results.z_rouse }}, la carga {% if results.z_rouse > 2.5 %}de fondo{% else %}en suspensión{% endif %} es dominante.</p>
+
+<!-- ═══════════════════ CAP. 10 ═══════════════════ -->
+<div class="page-break"></div>
+<h1>10. Conclusiones</h1>
+<p>El análisis del transporte de sedimentos para las condiciones de campo registradas (y = {{ results.depth }} m, V = {{ results.velocity }} m/s, S = {{ results.slope }} m/m, d₅₀ = {{ results.d50 }} mm, T = {{ results.temp }} °C) permite concluir:</p>
+<ul>
+  <li>El material del lecho ({{ results.classification }}) presenta un parámetro de Shields θ₀ = {{ results.theta_0 }} {% if results.mobile %}mayor{% else %}menor{% endif %} al umbral crítico θ_c = {{ results.theta_c }}, con relación θ₀/θ_c = {{ results.ratio }}.</li>
+  <li>El modo de transporte predominante es <strong>{{ results.transport_mode }}</strong> (Z = {{ results.z_rouse }}).</li>
+  <li>La carga de fondo varía entre {{ results.transport.meyer_peter_muller }} kg/(m·s) (MPM) y {{ results.transport.van_rijn }} kg/(m·s) (Van Rijn); la carga total estimada por Engelund-Hansen es {{ results.transport.engelund_hansen }} kg/(m·s).</li>
+  <li>El cauce se clasifica como tipo <strong>{{ results.rosgen_type }}</strong> ({{ results.rosgen_desc }}).</li>
+  <li>La sensibilidad del transporte al tirante es elevada, con incrementos de varios órdenes de magnitud entre tirantes de 0.2 m y 5.0 m.</li>
+</ul>
+
+<!-- ═══════════════════ CAP. 11 ═══════════════════ -->
+<h1>11. Apéndices</h1>
+<p><strong>Apéndice A.</strong> Datos de campo: coordenadas, sección transversal, mediciones velocimétri­cas.</p>
+<p><strong>Apéndice B.</strong> Curva granulométrica (Figura 1, obtenida por tamizado ASTM D422 / NB 1075).</p>
+<p><strong>Apéndice C.</strong> Ecuaciones detalladas de Van Rijn (1984) y Meyer-Peter y Müller (1948).</p>
+<p><strong>Apéndice D.</strong> Resultados de modelación numérica HEC-RAS / HEC-HMS.</p>
+<p><strong>Apéndice E.</strong> Código Python GEE para la generación de 15 capas GeoTIFF y 4 tablas CSV.</p>
+<p><strong>Apéndice F.</strong> Fotografías del sitio de muestreo y registro de campo.</p>
+
+<!-- ═══════════════════ REFERENCIAS ═══════════════════ -->
+<div class="page-break"></div>
+<h1>Referencias</h1>
+<p class="apa-ref">Brune, G. M. (1953). Trap efficiency of reservoirs. <em>Transactions of the American Geophysical Union, 34</em>(3), 407–418. https://doi.org/10.1029/TR034i003p00407</p>
+<p class="apa-ref">Engelund, F., y Hansen, E. (1967). <em>A monograph on sediment transport in alluvial streams</em>. Teknisk Forlag.</p>
+<p class="apa-ref">Exner, F. M. (1920). Zur Physik der Dünen. <em>Sitzungsberichte der Kaiserlichen Akademie der Wissenschaften, 129</em>(2a), 929–952.</p>
+<p class="apa-ref">Lacaux, J. P., Tourre, Y. M., Vignolles, C., Ndione, J. A., y Lafaye, M. (2007). Classification of ponds from high-spatial resolution remote sensing. <em>Remote Sensing of Environment, 106</em>(1), 66–74. https://doi.org/10.1016/j.rse.2006.07.012</p>
+<p class="apa-ref">Meyer-Peter, E., y Müller, R. (1948). Formulas for bed-load transport. En <em>Proceedings of the 2nd IAHR Congress</em> (pp. 39–64). IAHR.</p>
+<p class="apa-ref">Ramirez Quispe, R. A. (2021). <em>Transporte de sedimentos con Python – Tomo 1</em>. Editorial Boliviana de Ingeniería Hidráulica.</p>
+<p class="apa-ref">Richardson, E. V., y Davis, S. R. (2001). <em>Evaluating scour at bridges</em> (4.ª ed., HEC-18). Federal Highway Administration.</p>
+<p class="apa-ref">Rosgen, D. L. (1994). A classification of natural rivers. <em>Catena, 22</em>(3), 169–199. https://doi.org/10.1016/0341-8162(94)90001-9</p>
+<p class="apa-ref">Soulsby, R. (1997). <em>Dynamics of marine sands: A manual for practical applications</em>. Thomas Telford.</p>
+<p class="apa-ref">USGS. (2000). <em>National elevation dataset — SRTM 30 m</em>. U.S. Geological Survey. https://www.usgs.gov/</p>
+<p class="apa-ref">Van Rijn, L. C. (1984). Sediment transport, part I: Bed load transport. <em>Journal of Hydraulic Engineering, 110</em>(10), 1431–1456. https://doi.org/10.1061/(ASCE)0733-9429(1984)110:10(1431)</p>
+<p class="apa-ref">Van Rijn, L. C. (1993). <em>Principles of sediment transport in rivers, estuaries and coastal seas</em>. Aqua Publications.</p>
+<p class="apa-ref">Wentworth, C. K. (1922). A scale of grade and class terms for clastic sediments. <em>Journal of Geology, 30</em>(5), 377–392. https://doi.org/10.1086/622910</p>
+<p class="apa-ref">Wischmeier, W. H., y Smith, D. D. (1978). <em>Predicting rainfall erosion losses: A guide to conservation planning</em> (Agriculture Handbook No. 537). USDA.</p>
+
+</body>
+</html>

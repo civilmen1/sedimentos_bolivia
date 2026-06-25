@@ -249,6 +249,27 @@ table tfoot td {
 .btn-action:hover { opacity: .85; }
 .btn-print { background: #1e3a8a; color: #fff; }
 .btn-gee   { background: #166534; color: #fff; }
+.btn-pdf   { background: #7c2d12; color: #fff; }
+
+/* ── Figuras APA ── */
+.apa-figure {
+  margin: 1.5em 0 0.5em;
+  text-align: center;
+  page-break-inside: avoid;
+}
+.apa-figure img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e5e7eb;
+}
+.apa-figure figcaption {
+  font-size: 11pt;
+  text-align: left;
+  font-style: normal;
+  color: #111;
+  margin-top: 6px;
+  line-height: 1.6;
+}
 
 @media print {
   body { background: #fff; padding: 0; }
@@ -460,6 +481,13 @@ table tfoot td {
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> Clasificación textural según Wentworth (1922). Para curva granulométrica completa ver Apéndice B.</p>
 
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.grain_size }}" alt="Curva granulométrica del material del lecho">
+    <figcaption><em>Figura 1.</em> Curva granulométrica del material del lecho con distribución log-normal ajustada. Se marcan los percentiles d₁₆, d₅₀, d₈₄ y d₉₀, y las bandas de clasificación textural de Wentworth (1922). Dato de campo: d₅₀ = {{ results.d50 }} mm, d₉₀ = {{ results.d90 }} mm.</figcaption>
+  </figure>
+  {% endif %}
+
   <h2>4.2 Clasificación de Partículas</h2>
   <p>De acuerdo con la escala de Wentworth (1922), el material de lecho con d₅₀ = {{ results.d50 }} mm corresponde a la clase textural <strong>{{ results.classification }}</strong>. Esta categoría condiciona el mecanismo de transporte predominante, la resistencia al arranque hidráulico y la capacidad de empaquetamiento del lecho.</p>
 
@@ -481,6 +509,13 @@ table tfoot td {
   <p>El número de Shields adimensional θ compara el esfuerzo de corte hidráulico con la fuerza de estabilidad gravitacional sobre una partícula del lecho:</p>
   <div class="eq-block">$$\theta = \frac{\tau_0}{(\rho_s - \rho_w)\,g\,d_{50}} = \frac{\rho_w\,g\,y\,S}{(s-1)\,\rho_w\,g\,d_{50}}$$</div>
   <p>El valor crítico de Shields θ_c, determinado en función de D* según la curva de Shields (Ramirez Quispe, 2021), es θ_c = {{ results.theta_c }}. Para las condiciones actuales θ₀ = {{ results.theta_0 }}, resultando en una relación θ₀/θ_c = {{ results.ratio }}.</p>
+
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.shields }}" alt="Diagrama de Shields">
+    <figcaption><em>Figura 2.</em> Diagrama de Shields con curva de umbral de movimiento según Soulsby (1997). El símbolo cuadrado indica el punto calculado (D* = {{ results.dstar }}, θ₀ = {{ results.theta_0 }}) y el triángulo el umbral crítico (θ_c = {{ results.theta_c }}). {% if results.mobile %}El lecho se encuentra en condición de movilidad activa.{% else %}El lecho se encuentra estable bajo las condiciones registradas.{% endif %}</figcaption>
+  </figure>
+  {% endif %}
 
   <!-- CAPÍTULO 5 -->
   <h1>5. Hidráulica del Cauce</h1>
@@ -523,6 +558,13 @@ table tfoot td {
   <p>El esfuerzo de corte actuante sobre el lecho τ₀ se calcula como:</p>
   <div class="eq-block">$$\tau_0 = \rho_w\,g\,y\,S = {{ results.rho_w }} \times 9.807 \times {{ results.depth }} \times {{ results.slope }} = {{ results.tau_0 }}\text{ Pa}$$</div>
   <p>Este valor supera {% if results.mobile %}al{% else %}no supera al{% endif %} esfuerzo crítico τ_c = {{ results.tau_c }} Pa, lo que indica {% if results.mobile %}movilización activa del material de lecho{% else %}estabilidad del material de lecho{% endif %}.</p>
+
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.hydraulic_profile }}" alt="Perfil hidráulico">
+    <figcaption><em>Figura 5.</em> Variación de la velocidad media V (m/s) y el esfuerzo de fondo τ₀ (Pa) en función del tirante hidráulico y (m), escalada con ley de Manning (V ∝ y²/³). El punto circular señala las condiciones medidas en campo: y = {{ results.depth }} m, V = {{ results.velocity }} m/s, τ₀ = {{ results.tau_0 }} Pa.</figcaption>
+  </figure>
+  {% endif %}
 
 </div>
 
@@ -625,6 +667,13 @@ table tfoot td {
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> q en kg por metro de ancho por segundo. MPM y Van Rijn calculan carga de fondo; Engelund-Hansen estima carga total (fondo + suspensión). Para balance de masas se recomienda combinar ambos tipos con mediciones de sólidos en suspensión (SSC).</p>
 
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.transport_compare }}" alt="Comparación de fórmulas de transporte">
+    <figcaption><em>Figura 3.</em> Comparación del caudal sólido unitario q_s [kg/(m·s)] calculado con tres fórmulas de referencia bajo las condiciones hidráulicas de campo (y = {{ results.depth }} m, V = {{ results.velocity }} m/s, S = {{ results.slope }}, d₅₀ = {{ results.d50 }} mm). Las diferencias entre modelos reflejan los distintos mecanismos de transporte que cada fórmula describe.</figcaption>
+  </figure>
+  {% endif %}
+
 </div>
 
 <!-- ══════════════════════════════════════════════════════════
@@ -675,6 +724,13 @@ table tfoot td {
     </tbody>
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> Valores calculados con d₅₀ = {{ results.d50 }} mm, S = {{ results.slope }}, v = {{ results.velocity }} m/s constante. La fila en negrita corresponde al tirante medido en campo.</p>
+
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.sensitivity }}" alt="Análisis de sensibilidad del transporte">
+    <figcaption><em>Figura 4.</em> Análisis de sensibilidad del transporte sólido unitario q_s en función del tirante hidráulico y (m) para las tres fórmulas evaluadas. Escala logarítmica en el eje vertical. La línea vertical punteada corresponde al tirante medido en campo (y = {{ results.depth }} m). Se observa la mayor sensibilidad de la fórmula de Engelund-Hansen con el tirante, característica de los modelos de carga total.</figcaption>
+  </figure>
+  {% endif %}
 
   <!-- CAPÍTULO 8 -->
   <h1>8. Modelación Hidrosedimentológica</h1>
@@ -797,8 +853,12 @@ table tfoot td {
      href="/gee_code?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}">
     🌍 Código GEE
   </a>
+  <a class="btn-action btn-pdf"
+     href="/report/pdf?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}&rho_s={{ results.rho_s }}&depth={{ results.depth }}&velocity={{ results.velocity }}&temp={{ results.temp }}&slope={{ results.slope }}">
+    📄 Descargar PDF
+  </a>
   <button class="btn-action btn-print" onclick="window.print()">
-    🖨 Imprimir / PDF
+    🖨 Imprimir
   </button>
 </div>
 
