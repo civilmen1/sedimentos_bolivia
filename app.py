@@ -277,6 +277,59 @@ def generate_charts(r):
     fig.tight_layout()
     charts['hydraulic_profile'] = _fig_to_b64(fig)
 
+    # ── Figura 6: Mapa de Ubicación ──────────────────────────────────────
+    lat_v = float(r.get('lat', 0.0))
+    lon_v = float(r.get('lon', 0.0))
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    ax.set_facecolor('#d6eaf8')
+    r15_deg = 15.0 / 111.0
+    r2_deg  = 2.0  / 111.0
+    for radius_deg, lcolor, lstyle, lbl in [
+        (r2_deg,  '#E74C3C', '--', 'Radio 2 km (cauce)'),
+        (r15_deg, '#2980B9', ':',  'Radio 15 km (cuenca)'),
+    ]:
+        circle = plt.Circle((lon_v, lat_v), radius_deg,
+                             color=lcolor, fill=False, ls=lstyle, lw=1.8, alpha=0.85)
+        ax.add_patch(circle)
+        km_lbl = '2 km' if radius_deg == r2_deg else '15 km'
+        ax.text(lon_v + radius_deg * 0.72, lat_v + radius_deg * 0.72,
+                km_lbl, fontsize=7, color=lcolor, ha='left', va='bottom')
+    ax.plot(lon_v, lat_v, '*', color='#E74C3C', ms=18, zorder=7,
+            markeredgecolor='white', markeredgewidth=0.8)
+    ax.axhline(lat_v, color='gray', ls='-', lw=0.5, alpha=0.4)
+    ax.axvline(lon_v, color='gray', ls='-', lw=0.5, alpha=0.4)
+    pad = r15_deg * 1.3
+    ax.set_xlim(lon_v - pad, lon_v + pad)
+    ax.set_ylim(lat_v - pad, lat_v + pad)
+    ax.set_xlabel('Longitud (°)')
+    ax.set_ylabel('Latitud (°)')
+    ax.set_title('Figura 6. Mapa de ubicación del punto de muestreo')
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.30, lw=0.5)
+    ax.text(lon_v, lat_v - pad * 0.08,
+            f'({lat_v:.4f}°, {lon_v:.4f}°)', ha='center', va='top',
+            fontsize=8, color='#C0392B',
+            bbox=dict(boxstyle='round,pad=0.25', facecolor='white', alpha=0.85))
+    arr_x = lon_v + pad * 0.82
+    arr_y = lat_v - pad * 0.85
+    ax.annotate('', xy=(arr_x, arr_y + pad * 0.18),
+                xytext=(arr_x, arr_y),
+                arrowprops=dict(arrowstyle='->', color='black', lw=1.8))
+    ax.text(arr_x, arr_y + pad * 0.22, 'N', ha='center',
+            fontsize=10, fontweight='bold')
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='#E74C3C', ls='--', lw=1.8, label='Radio 2 km (cauce)'),
+        Line2D([0], [0], color='#2980B9', ls=':',  lw=1.8, label='Radio 15 km (cuenca)'),
+        Line2D([0], [0], marker='*', color='#E74C3C', ls='none',
+               ms=12, markeredgecolor='white', markeredgewidth=0.6,
+               label='Punto de estudio'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=8,
+              framealpha=0.9, edgecolor='#aaa')
+    fig.tight_layout()
+    charts['location_map'] = _fig_to_b64(fig)
+
     return charts
 
 

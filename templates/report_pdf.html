@@ -83,7 +83,18 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 
 <!-- ═══════════════════ CAP. 2 ═══════════════════ -->
 <h1>2. Descripción del Área de Estudio</h1>
-<p>El punto de análisis se localiza en las coordenadas geográficas {{ results.lat }}° de latitud y {{ results.lon }}° de longitud, dentro del territorio boliviano. La pendiente del cauce S = {{ results.slope }} m/m ({{ results.slope_pct }}%) se obtuvo del Modelo Digital de Elevación SRTM (resolución 30 m) procesado en GEE. Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s.</p>
+<h2>2.1 Ubicación Geográfica</h2>
+<p>El punto de análisis se localiza en las coordenadas geográficas {{ results.lat }}° de latitud y {{ results.lon }}° de longitud, dentro del territorio de la República Plurinacional de Bolivia. La Figura 6 ilustra la ubicación del punto de muestreo con los radios de análisis de cauce (2 km) y cuenca (15 km) empleados en el procesamiento satelital.</p>
+
+{% if results.charts and results.charts.location_map %}
+<figure>
+  <img src="{{ results.charts.location_map }}" alt="Mapa de ubicación">
+  <figcaption><em>Figura 6.</em> Mapa de ubicación del punto de muestreo ({{ results.lat }}°, {{ results.lon }}°). Radio rojo: área de análisis de cauce (2 km). Radio azul: área de análisis de cuenca (15 km). Proyección geográfica WGS84. Elaboración propia con matplotlib.</figcaption>
+</figure>
+{% endif %}
+
+<h2>2.2 Descripción Hidrológica</h2>
+<p>La pendiente del cauce S = {{ results.slope }} m/m ({{ results.slope_pct }}%) se obtuvo del Modelo Digital de Elevación SRTM (resolución 30 m) procesado en GEE. Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s. La región presenta un régimen hidrológico estacional andino-amazónico, con concentración del 70–85% de la precipitación anual en la época húmeda (noviembre–marzo).</p>
 
 <!-- ═══════════════════ CAP. 3 ═══════════════════ -->
 <h1>3. Morfología del Río</h1>
@@ -267,12 +278,48 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <div class="page-break"></div>
 <h1>8. Modelación Hidrosedimentológica</h1>
 <h2>8.1 Google Earth Engine</h2>
-<p>La plataforma GEE permite el análisis satelital de la dinámica sedimentaria mediante Sentinel-2, Landsat 8/9, SRTM y ESA WorldCover. Para el área de estudio se generaron 15 capas GeoTIFF (DEM, red hidrográfica, Manning's n, número de curva CN, índices espectrales NDVI/NDWI/NDTI, zonas de inundación JRC, migración lateral, entre otros) y 4 tablas CSV exportadas a Google Drive (Apéndice E).</p>
+<p>La plataforma Google Earth Engine (GEE) permite el análisis satelital de la dinámica sedimentaria mediante Sentinel-2, Landsat 8/9, SRTM y ESA WorldCover. Para el área de estudio se generaron <strong>15 capas GeoTIFF</strong> y <strong>4 tablas CSV</strong> exportadas a la carpeta GEE_Sedimentos_Bolivia en Google Drive (Tabla 6). Las capas cubren geomorfología, cobertura del suelo, índices espectrales, condiciones hidrológicas e índices de riesgo a escala de cauce (2 km) y cuenca (15 km).</p>
 <h2>8.2 Pendiente Satelital</h2>
 <p>S = {{ results.slope }} m/m obtenida del DEM SRTM 30 m mediante ee.Terrain.slope() en GEE, convertida con S = tan(α).</p>
 <h2>8.3 Índice NDTI</h2>
 <p class="eq">NDTI = (ρ_Red − ρ_Green) / (ρ_Red + ρ_Green) = (B4 − B3) / (B4 + B3)</p>
 <p>Valores NDTI &gt; 0.1 indican alta carga de sedimentos en suspensión. La serie temporal Sentinel-2 permite identificar pulsos de turbidez asociados a eventos de crecida.</p>
+
+<h2>8.4 Catálogo de Capas GEE</h2>
+<p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 6</span></p>
+<p class="no-indent tbl-caption"><em>Catálogo de 15 Capas GeoTIFF y 4 Tablas CSV Generadas con Google Earth Engine</em></p>
+<table style="font-size:9pt;">
+  <thead>
+    <tr>
+      <th>Capa</th>
+      <th>Fuente</th>
+      <th style="text-align:right;">Res.</th>
+      <th>Descripción</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Morf01</strong> DEM+Hillshade</td><td>SRTM v3</td><td class="td-num">30 m</td><td>MDE con sombreado (az. 315°, alt. 45°)</td></tr>
+    <tr><td><strong>Morf02</strong> Red Hidrográfica</td><td>HydroSHEDS</td><td class="td-num">30 m</td><td>Drenaje ≥ 1 000 celdas acumuladas</td></tr>
+    <tr><td><strong>Morf03</strong> Pendiente</td><td>SRTM ee.Terrain</td><td class="td-num">30 m</td><td>S = tan α (m/m); estadísticas zonales</td></tr>
+    <tr><td><strong>Morf04</strong> WorldCover</td><td>ESA 2021</td><td class="td-num">10 m</td><td>11 clases de uso del suelo; Manning's n</td></tr>
+    <tr><td><strong>Morf05</strong> NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>(B8−B4)/(B8+B4); mediana 2020–2023</td></tr>
+    <tr><td><strong>Morf06</strong> NDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>(B3−B8)/(B3+B8); cuerpos de agua</td></tr>
+    <tr><td><strong>Morf07</strong> NDTI Turbidez</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>(B4−B3)/(B4+B3); carga en suspensión</td></tr>
+    <tr><td><strong>Morf08</strong> Manning's n</td><td>ESA WorldCover</td><td class="td-num">10 m</td><td>Rugosidad reclasificada por cobertura</td></tr>
+    <tr><td><strong>Morf09</strong> Curva CN</td><td>WorldCover+SRTM</td><td class="td-num">10 m</td><td>SCS-CN para escorrentía directa (AMC II)</td></tr>
+    <tr><td><strong>Morf10</strong> Inundación JRC</td><td>JRC GSW</td><td class="td-num">30 m</td><td>Frecuencia de agua superficial 1984–2021</td></tr>
+    <tr><td><strong>Morf11</strong> Migración Lateral</td><td>Landsat 8/9</td><td class="td-num">30 m</td><td>Cambio NDWI seca–húmeda; migración cauce</td></tr>
+    <tr><td><strong>Morf12</strong> Precipitación</td><td>CHIRPS v2.0</td><td class="td-num">~5 km</td><td>Precipitación media anual 1981–2022</td></tr>
+    <tr><td><strong>Morf13</strong> Índice Riesgo</td><td>Multi-fuente GEE</td><td class="td-num">30 m</td><td>Compuesto pendiente+JRC+CN; cinco clases</td></tr>
+    <tr><td><strong>Morf14</strong> Landsat RGB</td><td>Landsat 8/9 L2</td><td class="td-num">30 m</td><td>Composición B4-B3-B2 libre de nubes</td></tr>
+    <tr><td><strong>Morf15</strong> Sentinel FCC</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Falso color (B8-B4-B3); vegetación riparia</td></tr>
+    <tr style="border-top:1px solid #aaa;"><td><em>Tabla1</em> Est. DEM</td><td>SRTM</td><td class="td-num">CSV</td><td>Elevación min/max/media/std en buffers</td></tr>
+    <tr><td><em>Tabla2</em> Coberturas</td><td>ESA WorldCover</td><td class="td-num">CSV</td><td>Área y % por clase en la cuenca</td></tr>
+    <tr><td><em>Tabla3</em> Series NDVI/NDWI/NDTI</td><td>Sentinel-2</td><td class="td-num">CSV</td><td>Valores medios mensuales 2020–2023</td></tr>
+    <tr><td><em>Tabla4</em> Estadísticas Hid.</td><td>CHIRPS+JRC</td><td class="td-num">CSV</td><td>Precipitación mensual y frecuencia inund.</td></tr>
+  </tbody>
+</table>
+<p class="tbl-note no-indent"><strong>Nota.</strong> GeoTIFF exportados en EPSG:4326 a carpeta "GEE_Sedimentos_Bolivia" en Google Drive. Código GEE disponible en el repositorio del proyecto.</p>
 
 <!-- ═══════════════════ CAP. 9 ═══════════════════ -->
 <h1>9. Impactos sobre Infraestructura</h1>
