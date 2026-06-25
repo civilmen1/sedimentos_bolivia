@@ -1,13 +1,22 @@
 import ee
+import os
+import json
 
 def initialize_gee():
     """
     Initializes Google Earth Engine.
-    Requires service account credentials or user authentication in a real environment.
-    For this sandbox, we assume ee is already authenticated or we mock it for tests.
+    Supports Service Account credentials via GEE_SERVICE_ACCOUNT_JSON environment variable.
     """
     try:
-        ee.Initialize()
+        service_account_json = os.environ.get('GEE_SERVICE_ACCOUNT_JSON')
+        if service_account_json:
+            # Assuming the env var contains the JSON string of the key file
+            info = json.loads(service_account_json)
+            credentials = ee.ServiceAccountCredentials(info['client_email'], key_data=service_account_json)
+            ee.Initialize(credentials)
+        else:
+            # Fallback to default authentication (useful for local development if authenticated via 'earthengine authenticate')
+            ee.Initialize()
         return True
     except Exception as e:
         print(f"GEE Initialization failed: {e}")
