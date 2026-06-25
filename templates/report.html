@@ -11,6 +11,8 @@
   };
 </script>
 <script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 /* ══════════════════════════════════════════════════════════
    APA 7th Edition — Tamaño Carta (8.5 × 11 in)
@@ -249,6 +251,38 @@ table tfoot td {
 .btn-action:hover { opacity: .85; }
 .btn-print { background: #1e3a8a; color: #fff; }
 .btn-gee   { background: #166534; color: #fff; }
+.btn-pdf   { background: #7c2d12; color: #fff; }
+
+/* ── Mapa interactivo Leaflet (sólo pantalla) ── */
+.leaflet-map-container {
+  width: 100%;
+  height: 320px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  margin: 1em 0 0.25em;
+  z-index: 0;
+}
+@media print { .leaflet-map-container { display: none; } }
+
+/* ── Figuras APA ── */
+.apa-figure {
+  margin: 1.5em 0 0.5em;
+  text-align: center;
+  page-break-inside: avoid;
+}
+.apa-figure img {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #e5e7eb;
+}
+.apa-figure figcaption {
+  font-size: 11pt;
+  text-align: left;
+  font-style: normal;
+  color: #111;
+  margin-top: 6px;
+  line-height: 1.6;
+}
 
 @media print {
   body { background: #fff; padding: 0; }
@@ -343,6 +377,19 @@ table tfoot td {
 
   <h2>2.1 Ubicación Geográfica</h2>
   <p>El punto de muestreo se localiza en las coordenadas geográficas {{ results.lat }}° de latitud sur y {{ results.lon }}° de longitud oeste, dentro del territorio de la República Plurinacional de Bolivia. La elevación aproximada del sitio es de [altitud m s.n.m.], determinada a partir del Modelo Digital de Elevación SRTM de 30 m de resolución espacial (USGS, 2000).</p>
+
+  <!-- Mapa interactivo (pantalla) + Figura 6 estática (impresión/PDF) -->
+  <div class="leaflet-map-container" id="map-ubicacion"></div>
+  <p class="no-indent" style="font-size:9pt; text-align:center; color:#555; margin-bottom:0.5em; font-style:italic;">
+    Mapa interactivo — base cartográfica OpenStreetMap. Radio 2 km (rojo) y 15 km (azul).
+  </p>
+
+  {% if results.charts and results.charts.location_map %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.location_map }}" alt="Mapa de ubicación del punto de muestreo">
+    <figcaption><em>Figura 6.</em> Mapa de ubicación del punto de muestreo ({{ results.lat }}°, {{ results.lon }}°). Se muestran los radios de análisis de cauce (2 km, línea roja) y cuenca (15 km, línea azul), utilizados como áreas de exportación en el script de Google Earth Engine. Proyección geográfica WGS84.</figcaption>
+  </figure>
+  {% endif %}
 
   <h2>2.2 Características de la Cuenca</h2>
   <p>La cuenca tributaria al sitio de muestreo presenta una superficie de [Área km²], con una longitud del cauce principal de [Lc km] y un desnivel entre la cabecera y el punto de cierre de [ΔH m]. La pendiente media del cauce calculada satelitalmente es de S = {{ results.slope }} m/m ({{ results.slope_pct }}%), valor que encuadra la dinámica de transporte en el régimen {% if results.slope > 0.02 %}de alta energía, característico de ríos de montaña{% elif results.slope > 0.005 %}transicional, con alternancia de tramos empinados y llanos{% else %}de baja energía, propio de llanuras de inundación{% endif %}.</p>
@@ -460,6 +507,13 @@ table tfoot td {
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> Clasificación textural según Wentworth (1922). Para curva granulométrica completa ver Apéndice B.</p>
 
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.grain_size }}" alt="Curva granulométrica del material del lecho">
+    <figcaption><em>Figura 1.</em> Curva granulométrica del material del lecho con distribución log-normal ajustada. Se marcan los percentiles d₁₆, d₅₀, d₈₄ y d₉₀, y las bandas de clasificación textural de Wentworth (1922). Dato de campo: d₅₀ = {{ results.d50 }} mm, d₉₀ = {{ results.d90 }} mm.</figcaption>
+  </figure>
+  {% endif %}
+
   <h2>4.2 Clasificación de Partículas</h2>
   <p>De acuerdo con la escala de Wentworth (1922), el material de lecho con d₅₀ = {{ results.d50 }} mm corresponde a la clase textural <strong>{{ results.classification }}</strong>. Esta categoría condiciona el mecanismo de transporte predominante, la resistencia al arranque hidráulico y la capacidad de empaquetamiento del lecho.</p>
 
@@ -481,6 +535,13 @@ table tfoot td {
   <p>El número de Shields adimensional θ compara el esfuerzo de corte hidráulico con la fuerza de estabilidad gravitacional sobre una partícula del lecho:</p>
   <div class="eq-block">$$\theta = \frac{\tau_0}{(\rho_s - \rho_w)\,g\,d_{50}} = \frac{\rho_w\,g\,y\,S}{(s-1)\,\rho_w\,g\,d_{50}}$$</div>
   <p>El valor crítico de Shields θ_c, determinado en función de D* según la curva de Shields (Ramirez Quispe, 2021), es θ_c = {{ results.theta_c }}. Para las condiciones actuales θ₀ = {{ results.theta_0 }}, resultando en una relación θ₀/θ_c = {{ results.ratio }}.</p>
+
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.shields }}" alt="Diagrama de Shields">
+    <figcaption><em>Figura 2.</em> Diagrama de Shields con curva de umbral de movimiento según Soulsby (1997). El símbolo cuadrado indica el punto calculado (D* = {{ results.dstar }}, θ₀ = {{ results.theta_0 }}) y el triángulo el umbral crítico (θ_c = {{ results.theta_c }}). {% if results.mobile %}El lecho se encuentra en condición de movilidad activa.{% else %}El lecho se encuentra estable bajo las condiciones registradas.{% endif %}</figcaption>
+  </figure>
+  {% endif %}
 
   <!-- CAPÍTULO 5 -->
   <h1>5. Hidráulica del Cauce</h1>
@@ -523,6 +584,13 @@ table tfoot td {
   <p>El esfuerzo de corte actuante sobre el lecho τ₀ se calcula como:</p>
   <div class="eq-block">$$\tau_0 = \rho_w\,g\,y\,S = {{ results.rho_w }} \times 9.807 \times {{ results.depth }} \times {{ results.slope }} = {{ results.tau_0 }}\text{ Pa}$$</div>
   <p>Este valor supera {% if results.mobile %}al{% else %}no supera al{% endif %} esfuerzo crítico τ_c = {{ results.tau_c }} Pa, lo que indica {% if results.mobile %}movilización activa del material de lecho{% else %}estabilidad del material de lecho{% endif %}.</p>
+
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.hydraulic_profile }}" alt="Perfil hidráulico">
+    <figcaption><em>Figura 5.</em> Variación de la velocidad media V (m/s) y el esfuerzo de fondo τ₀ (Pa) en función del tirante hidráulico y (m), escalada con ley de Manning (V ∝ y²/³). El punto circular señala las condiciones medidas en campo: y = {{ results.depth }} m, V = {{ results.velocity }} m/s, τ₀ = {{ results.tau_0 }} Pa.</figcaption>
+  </figure>
+  {% endif %}
 
 </div>
 
@@ -625,6 +693,13 @@ table tfoot td {
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> q en kg por metro de ancho por segundo. MPM y Van Rijn calculan carga de fondo; Engelund-Hansen estima carga total (fondo + suspensión). Para balance de masas se recomienda combinar ambos tipos con mediciones de sólidos en suspensión (SSC).</p>
 
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.transport_compare }}" alt="Comparación de fórmulas de transporte">
+    <figcaption><em>Figura 3.</em> Comparación del caudal sólido unitario q_s [kg/(m·s)] calculado con tres fórmulas de referencia bajo las condiciones hidráulicas de campo (y = {{ results.depth }} m, V = {{ results.velocity }} m/s, S = {{ results.slope }}, d₅₀ = {{ results.d50 }} mm). Las diferencias entre modelos reflejan los distintos mecanismos de transporte que cada fórmula describe.</figcaption>
+  </figure>
+  {% endif %}
+
 </div>
 
 <!-- ══════════════════════════════════════════════════════════
@@ -676,11 +751,18 @@ table tfoot td {
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> Valores calculados con d₅₀ = {{ results.d50 }} mm, S = {{ results.slope }}, v = {{ results.velocity }} m/s constante. La fila en negrita corresponde al tirante medido en campo.</p>
 
+  {% if results.charts %}
+  <figure class="apa-figure">
+    <img src="{{ results.charts.sensitivity }}" alt="Análisis de sensibilidad del transporte">
+    <figcaption><em>Figura 4.</em> Análisis de sensibilidad del transporte sólido unitario q_s en función del tirante hidráulico y (m) para las tres fórmulas evaluadas. Escala logarítmica en el eje vertical. La línea vertical punteada corresponde al tirante medido en campo (y = {{ results.depth }} m). Se observa la mayor sensibilidad de la fórmula de Engelund-Hansen con el tirante, característica de los modelos de carga total.</figcaption>
+  </figure>
+  {% endif %}
+
   <!-- CAPÍTULO 8 -->
   <h1>8. Modelación Hidrosedimentológica</h1>
 
   <h2>8.1 Integración con Google Earth Engine</h2>
-  <p>La plataforma Google Earth Engine (GEE) permite el análisis espacial de la dinámica sedimentaria mediante el procesamiento de series de imágenes multiespectrales y modelos de elevación digital a escala de cuenca. Para el área de estudio se generaron nueve mapas temáticos que caracterizan la geomorfología, cobertura del suelo, condiciones hidrológicas e índices espectrales relacionados con la turbidez y el transporte de sedimentos (ver Apéndice E).</p>
+  <p>La plataforma Google Earth Engine (GEE) permite el análisis espacial de la dinámica sedimentaria mediante el procesamiento de series de imágenes multiespectrales y modelos de elevación digital a escala de cuenca. Para el área de estudio se generaron <strong>15 capas GeoTIFF</strong> y <strong>4 tablas CSV</strong> que caracterizan la geomorfología, cobertura del suelo, condiciones hidrológicas e índices espectrales relacionados con la turbidez y el transporte de sedimentos (ver Apéndice E y Tabla 6).</p>
 
   <h2>8.2 Análisis de Pendiente Satelital</h2>
   <p>La pendiente del lecho S = {{ results.slope }} m/m se obtiene del Modelo Digital de Elevación SRTM (resolución 30 m), procesado mediante la función ee.Terrain.slope() en GEE. La conversión de grados a m/m emplea la relación trigonométrica S = tan(α), que proporciona mayor precisión que la aproximación lineal S ≈ α (radianes) para pendientes superiores al 5%.</p>
@@ -692,6 +774,44 @@ table tfoot td {
 
   <h2>8.4 Cobertura y Uso del Suelo</h2>
   <p>La clasificación de cobertura ESA WorldCover 2021 (resolución 10 m) proporciona el coeficiente de Manning asociado a cada unidad de uso del suelo, parámetro clave para la estimación de la resistencia al flujo en la cuenca y para la aplicación de modelos de erosión tipo USLE/RUSLE (Wischmeier y Smith, 1978). Las clases dominantes en el área de estudio se identifican en el Mapa 4 del Apéndice E.</p>
+
+  <h2>8.5 Catálogo de Capas GEE Generadas</h2>
+  <p>La Tabla 6 presenta el catálogo completo de los 15 archivos GeoTIFF y 4 tablas CSV generados por el script GEE para el punto de análisis ({{ results.lat }}°, {{ results.lon }}°), exportados a la carpeta <em>GEE_Sedimentos_Bolivia</em> en Google Drive.</p>
+
+  <p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 6</span></p>
+  <p class="no-indent tbl-caption"><em>Catálogo de Capas GeoTIFF y Tablas CSV Generadas con Google Earth Engine</em></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Capa / Archivo</th>
+        <th>Fuente satelital</th>
+        <th>Resolución</th>
+        <th>Descripción</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Morf01</strong> — DEM + Hillshade</td><td>SRTM v3</td><td class="td-num">30 m</td><td>Modelo digital de elevación con sombreado de relieve (azimut 315°, altitud 45°)</td></tr>
+      <tr><td><strong>Morf02</strong> — Red Hidrográfica</td><td>HydroSHEDS + SRTM</td><td class="td-num">30 m</td><td>Drenaje acumulado ≥ 1 000 celdas; caudal acumulado normalizado</td></tr>
+      <tr><td><strong>Morf03</strong> — Pendiente del Lecho</td><td>SRTM ee.Terrain</td><td class="td-num">30 m</td><td>Pendiente en m/m (S = tan α); estadísticas zonales en buffer 2 km</td></tr>
+      <tr><td><strong>Morf04</strong> — Cobertura ESA WorldCover</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Clasificación de 11 clases de uso del suelo; Manning's n asociado</td></tr>
+      <tr><td><strong>Morf05</strong> — NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Vegetación de Diferencia Normalizada (B8–B4)/(B8+B4); mediana 2020–2023</td></tr>
+      <tr><td><strong>Morf06</strong> — NDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Agua de Diferencia Normalizada (B3–B8)/(B3+B8); cuerpos de agua &gt; 0</td></tr>
+      <tr><td><strong>Morf07</strong> — NDTI Turbidez</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice Normalizado de Turbidez (B4–B3)/(B4+B3); proxy de carga en suspensión</td></tr>
+      <tr><td><strong>Morf08</strong> — Manning's n</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Coeficiente de rugosidad de Manning reclasificado por tipo de cobertura</td></tr>
+      <tr><td><strong>Morf09</strong> — Número de Curva CN</td><td>ESA WorldCover + SRTM</td><td class="td-num">10 m</td><td>Curva Número SCS-CN para cálculo de escorrentía directa (AMC II)</td></tr>
+      <tr><td><strong>Morf10</strong> — Inundación JRC</td><td>JRC Global Surface Water</td><td class="td-num">30 m</td><td>Frecuencia de ocurrencia de agua superficial 1984–2021 (0–100%)</td></tr>
+      <tr><td><strong>Morf11</strong> — Migración Lateral</td><td>Landsat 8/9</td><td class="td-num">30 m</td><td>Cambio en NDWI entre epocas seca y húmeda; proxy de migración de cauce</td></tr>
+      <tr><td><strong>Morf12</strong> — Precipitación CHIRPS</td><td>CHIRPS v2.0</td><td class="td-num">~5 km</td><td>Precipitación media anual 1981–2022; isoyetas interpoladas</td></tr>
+      <tr><td><strong>Morf13</strong> — Índice de Riesgo</td><td>Multi-fuente GEE</td><td class="td-num">30 m</td><td>Índice compuesto (pendiente + JRC + CN) normalizado 0–1; cinco clases de riesgo</td></tr>
+      <tr><td><strong>Morf14</strong> — Landsat Compuesto</td><td>Landsat 8/9 L2</td><td class="td-num">30 m</td><td>Composición RGB Landsat (B4-B3-B2) libre de nubes; mediana 2022–2023</td></tr>
+      <tr><td><strong>Morf15</strong> — Sentinel Falso Color</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Composición infrarrojo falso color (B8-B4-B3) para identificación de vegetación riparia</td></tr>
+      <tr style="border-top: 1px solid #aaa;"><td><em>Tabla1</em> — Estadísticas DEM</td><td>SRTM</td><td class="td-num">CSV</td><td>Elevación min/max/media/std en buffer 2 km y 15 km</td></tr>
+      <tr><td><em>Tabla2</em> — Coberturas (%)</td><td>ESA WorldCover</td><td class="td-num">CSV</td><td>Área y porcentaje de cada clase de cobertura en la cuenca</td></tr>
+      <tr><td><em>Tabla3</em> — Series NDVI/NDWI/NDTI</td><td>Sentinel-2</td><td class="td-num">CSV</td><td>Valores medios mensuales de índices espectrales 2020–2023</td></tr>
+      <tr><td><em>Tabla4</em> — Estadísticas Hidrológicas</td><td>CHIRPS + JRC</td><td class="td-num">CSV</td><td>Precipitación media mensual y frecuencia de inundación por año</td></tr>
+    </tbody>
+  </table>
+  <p class="tbl-note no-indent"><strong>Nota.</strong> Todos los archivos GeoTIFF se exportan en proyección WGS84 (EPSG:4326) a la carpeta "GEE_Sedimentos_Bolivia" en Google Drive del usuario. El código GEE completo se accede desde el botón "Código GEE" en la barra de acciones. Resoluciones indicadas son las nativas del producto fuente.</p>
 
   <!-- CAPÍTULO 9 -->
   <h1>9. Impactos sobre Infraestructura</h1>
@@ -797,10 +917,33 @@ table tfoot td {
      href="/gee_code?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}">
     🌍 Código GEE
   </a>
+  <a class="btn-action btn-pdf"
+     href="/report/pdf?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}&rho_s={{ results.rho_s }}&depth={{ results.depth }}&velocity={{ results.velocity }}&temp={{ results.temp }}&slope={{ results.slope }}">
+    📄 Descargar PDF
+  </a>
   <button class="btn-action btn-print" onclick="window.print()">
-    🖨 Imprimir / PDF
+    🖨 Imprimir
   </button>
 </div>
 
+<script>
+(function () {
+  var lat = {{ results.lat }};
+  var lon = {{ results.lon }};
+  var map = L.map('map-ubicacion', { zoomControl: true }).setView([lat, lon], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 18
+  }).addTo(map);
+  L.marker([lat, lon])
+    .addTo(map)
+    .bindPopup('<strong>Punto de muestreo</strong><br>Lat: ' + lat + '°<br>Lon: ' + lon + '°')
+    .openPopup();
+  L.circle([lat, lon], { radius: 2000,  color: '#E74C3C', fill: false, weight: 2, dashArray: '6 4' })
+    .addTo(map).bindPopup('Radio 2 km (análisis de cauce)');
+  L.circle([lat, lon], { radius: 15000, color: '#2980B9', fill: false, weight: 2, dashArray: '4 6' })
+    .addTo(map).bindPopup('Radio 15 km (análisis de cuenca)');
+})();
+</script>
 </body>
 </html>

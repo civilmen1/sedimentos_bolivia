@@ -1,7 +1,13 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 import numpy as np
 import math
+import io
+import base64
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 from models.sediment import (
     calculate_water_density,
     calculate_kinematic_viscosity,
@@ -91,6 +97,240 @@ def rosgen_classify(slope, d50_mm, froude):
             return ("C", "Bajo gradiente, meandriforme, amplia planicie de inundación")
     else:
         return ("D", "Muy bajo gradiente (S < 0.1%), potencial trenzamiento (braided)")
+
+
+def _norm_ppf(p):
+    """Normal quantile (rational approx., Abramowitz & Stegun 26.2.17)."""
+    if p <= 0: return -8.0
+    if p >= 1: return  8.0
+    q = min(p, 1 - p)
+    t = math.sqrt(-2.0 * math.log(q))
+    num = 2.515517 + 0.802853*t + 0.010328*t*t
+    den = 1.0 + 1.432788*t + 0.189269*t*t + 0.001308*t*t*t
+    val = t - num / den
+    return val if p >= 0.5 else -val
+
+
+def _fig_to_b64(fig):
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=150, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    plt.close(fig)
+    return 'data:image/png;base64,' + b64
+
+
+def generate_charts(r):
+    """Return dict of base64 PNG chart strings for the technical report."""
+    plt.rcParams.update({
+        'font.family': 'serif',
+        'font.size': 10,
+        'axes.labelsize': 11,
+        'axes.titlesize': 11,
+        'axes.titleweight': 'bold',
+        'axes.spines.top': False,
+        'axes.spines.right': False,
+        'figure.facecolor': 'white',
+    })
+    charts = {}
+    d50, d90 = r['d50'], r['d90']
+
+    # ── Figura 1: Curva Granulométrica ──────────────────────────────────
+    if d90 > d50 > 0:
+        ln_mu  = math.log(d50)
+        ln_sig = math.log(d90 / d50) / _norm_ppf(0.90)
+    else:
+        ln_mu  = math.log(max(d50, 1e-4))
+        ln_sig = 0.5
+
+    fig, ax = plt.subplots(figsize=(6.5, 3.8))
+    lo = math.log10(max(math.exp(ln_mu) * 0.01, 1e-4))
+    hi = math.log10(max(math.exp(ln_mu) * 100, 1e-3))
+    d_range = np.logspace(lo, hi, 400)
+    pct = np.array([
+        100 * 0.5 * (1 + math.erf((math.log(d) - ln_mu) / (ln_sig * math.sqrt(2))))
+        for d in d_range
+    ])
+    ax.semilogx(d_range, pct, color='#1a5276', lw=2.5)
+    ax.fill_betweenx(pct, d_range, alpha=0.06, color='#2471A3')
+
+    pct_colors = {16: '#27AE60', 50: '#E74C3C', 84: '#F39C12', 90: '#8E44AD'}
+    for p, col in pct_colors.items():
+        d_mark = math.exp(ln_mu + _norm_ppf(p / 100) * ln_sig)
+        if d_range[0] < d_mark < d_range[-1]:
+            ax.axvline(d_mark, color=col, ls='--', lw=0.9, alpha=0.75)
+            ax.plot(d_mark, p, 'o', color=col, ms=7, zorder=5)
+            ax.text(d_mark * 1.08, p + 1.5, f'd{p}={d_mark:.3f} mm', fontsize=8, color=col)
+
+    bands = [(1e-4, 0.004, '#FDEDEC', 'Arcilla'), (0.004, 0.0625, '#FEF0E6', 'Limo'),
+             (0.0625, 0.5, '#FEFDE7', 'Arena'), (0.5, 2.0, '#E8F8F5', 'Grava f.'),
+             (2.0, 64, '#EBF5FB', 'Grava')]
+    x_lo, x_hi = 10**lo, 10**hi
+    for x0, x1, bcolor, lbl in bands:
+        cx0, cx1 = max(x0, x_lo), min(x1, x_hi)
+        if cx0 < cx1:
+            ax.axvspan(cx0, cx1, alpha=0.30, color=bcolor, zorder=0)
+            ax.text(math.sqrt(cx0 * cx1), 2, lbl, ha='center', fontsize=7, color='#555')
+
+    ax.set_xlabel('Diámetro de partícula (mm)')
+    ax.set_ylabel('Porcentaje más fino (%)')
+    ax.set_title('Figura 1. Curva granulométrica del material del lecho')
+    ax.set_ylim(0, 100)
+    ax.grid(True, which='both', alpha=0.25, lw=0.5)
+    fig.tight_layout()
+    charts['grain_size'] = _fig_to_b64(fig)
+
+    # ── Figura 2: Diagrama de Shields ────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(6.5, 3.8))
+    ds_arr = np.logspace(-0.4, 3, 400)
+    tc_arr = 0.30 / (1 + 1.2 * ds_arr) + 0.055 * (1 - np.exp(-0.020 * ds_arr))
+    ax.loglog(ds_arr, tc_arr, 'k-', lw=2.2, label='Curva de Shields (Soulsby, 1997)', zorder=3)
+    ax.fill_between(ds_arr, tc_arr, 10, alpha=0.07, color='#E74C3C')
+    ax.fill_between(ds_arr, 1e-4, tc_arr, alpha=0.07, color='#27AE60')
+    ax.text(0.6, 2.0, 'Movimiento', color='#C0392B', fontsize=8, style='italic')
+    ax.text(0.6, 6e-3, 'Sin movimiento', color='#1E8449', fontsize=8, style='italic')
+
+    dstar_v  = r['dstar']
+    theta0_v = r['theta_0']
+    thetac_v = r['theta_c']
+    is_mobile = r['mobile']
+    pt_color  = '#E74C3C' if is_mobile else '#2980B9'
+    pt_label  = 'Calculado (móvil)' if is_mobile else 'Calculado (estable)'
+    ax.plot(dstar_v, theta0_v, 's', color=pt_color, ms=10, zorder=6,
+            label=f'{pt_label}: D*={dstar_v:.1f},  θ₀={theta0_v:.4f}')
+    ax.plot(dstar_v, thetac_v, '^', color='#F39C12', ms=9, zorder=6,
+            label=f'Umbral crítico θ_c = {thetac_v:.4f}')
+    ax.set_xlabel('Parámetro adimensional D*')
+    ax.set_ylabel('Parámetro de Shields θ')
+    ax.set_title('Figura 2. Diagrama de Shields — criterio de inicio de movimiento')
+    ax.set_xlim(0.4, 1000)
+    ax.set_ylim(5e-3, 5)
+    ax.legend(fontsize=8, loc='upper right')
+    ax.grid(True, which='both', alpha=0.25, lw=0.5)
+    fig.tight_layout()
+    charts['shields'] = _fig_to_b64(fig)
+
+    # ── Figura 3: Comparación de Fórmulas ───────────────────────────────
+    fig, ax = plt.subplots(figsize=(6.5, 3.0))
+    f_names  = ['Meyer-Peter\n& Müller (1948)', 'Engelund-\nHansen (1967)', 'Van Rijn\n(1984)']
+    f_values = [r['transport']['meyer_peter_muller'],
+                r['transport']['engelund_hansen'],
+                r['transport']['van_rijn']]
+    f_colors = ['#2980B9', '#27AE60', '#E67E22']
+    bars = ax.barh(f_names, f_values, color=f_colors, height=0.40,
+                   edgecolor='white', linewidth=0.5)
+    vmax = max(f_values) if max(f_values) > 0 else 1e-8
+    for bar, v in zip(bars, f_values):
+        ax.text(v + vmax * 0.02, bar.get_y() + bar.get_height() / 2,
+                f'{v:.3e}', va='center', fontsize=9)
+    ax.set_xlabel('Caudal sólido unitario q_s [kg/(m·s)]')
+    ax.set_title('Figura 3. Comparación de fórmulas de transporte de sedimentos')
+    ax.set_xlim(0, vmax * 1.32)
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2e'))
+    ax.grid(True, axis='x', alpha=0.3)
+    fig.tight_layout()
+    charts['transport_compare'] = _fig_to_b64(fig)
+
+    # ── Figura 4: Análisis de Sensibilidad ──────────────────────────────
+    fig, ax = plt.subplots(figsize=(6.5, 3.8))
+    sens  = r['sensitivity']
+    h_v   = [row['depth'] for row in sens]
+    mpm_v = [max(row['mpm'], 1e-12) for row in sens]
+    eh_v  = [max(row['eh'],  1e-12) for row in sens]
+    vr_v  = [max(row['vr'],  1e-12) for row in sens]
+    ax.semilogy(h_v, mpm_v, 'o-', color='#2980B9', lw=2, ms=5, label='Meyer-Peter & Müller')
+    ax.semilogy(h_v, eh_v,  's-', color='#27AE60', lw=2, ms=5, label='Engelund-Hansen')
+    ax.semilogy(h_v, vr_v,  '^-', color='#E67E22', lw=2, ms=5, label='Van Rijn')
+    ax.axvline(r['depth'], color='gray', ls='--', lw=1.2,
+               label=f'Tirante medido = {r["depth"]} m')
+    ax.set_xlabel('Tirante hidráulico y (m)')
+    ax.set_ylabel('Transporte sólido q_s [kg/(m·s)]')
+    ax.set_title('Figura 4. Sensibilidad del transporte con el tirante hidráulico')
+    ax.legend(fontsize=8)
+    ax.grid(True, which='both', alpha=0.25)
+    fig.tight_layout()
+    charts['sensitivity'] = _fig_to_b64(fig)
+
+    # ── Figura 5: Perfil Hidráulico ──────────────────────────────────────
+    fig, ax1 = plt.subplots(figsize=(6.5, 3.8))
+    ax2    = ax1.twinx()
+    h_max  = max(h_v) if h_v else 5.0
+    h_arr  = np.linspace(0.05, h_max, 100)
+    rho_w  = r['rho_w']
+    slope  = r['slope']
+    depth  = r['depth']
+    vel    = r['velocity']
+    v_arr  = [vel * (h / depth) ** (2 / 3) for h in h_arr]
+    tau_arr = [rho_w * G * h * slope for h in h_arr]
+    l1, = ax1.plot(h_arr, v_arr,    color='#2980B9', lw=2.5, label='Velocidad V (m/s)')
+    l2, = ax2.plot(h_arr, tau_arr,  color='#E74C3C', lw=2.5, ls='--', label='Tensión τ₀ (Pa)')
+    ax1.plot(depth, vel,         'o', color='#2980B9', ms=9, zorder=5)
+    ax2.plot(depth, r['tau_0'],  'o', color='#E74C3C', ms=9, zorder=5)
+    ax1.axvline(depth, color='gray', ls=':', lw=1)
+    ax1.set_xlabel('Tirante hidráulico y (m)')
+    ax1.set_ylabel('Velocidad media V (m/s)', color='#2980B9')
+    ax2.set_ylabel('Esfuerzo de fondo τ₀ (Pa)', color='#E74C3C')
+    ax1.set_title('Figura 5. Perfil hidráulico: velocidad y esfuerzo de fondo vs. tirante')
+    ax1.legend([l1, l2], [l.get_label() for l in [l1, l2]], fontsize=8, loc='upper left')
+    ax1.grid(True, alpha=0.25)
+    fig.tight_layout()
+    charts['hydraulic_profile'] = _fig_to_b64(fig)
+
+    # ── Figura 6: Mapa de Ubicación ──────────────────────────────────────
+    lat_v = float(r.get('lat', 0.0))
+    lon_v = float(r.get('lon', 0.0))
+    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    ax.set_facecolor('#d6eaf8')
+    r15_deg = 15.0 / 111.0
+    r2_deg  = 2.0  / 111.0
+    for radius_deg, lcolor, lstyle, lbl in [
+        (r2_deg,  '#E74C3C', '--', 'Radio 2 km (cauce)'),
+        (r15_deg, '#2980B9', ':',  'Radio 15 km (cuenca)'),
+    ]:
+        circle = plt.Circle((lon_v, lat_v), radius_deg,
+                             color=lcolor, fill=False, ls=lstyle, lw=1.8, alpha=0.85)
+        ax.add_patch(circle)
+        km_lbl = '2 km' if radius_deg == r2_deg else '15 km'
+        ax.text(lon_v + radius_deg * 0.72, lat_v + radius_deg * 0.72,
+                km_lbl, fontsize=7, color=lcolor, ha='left', va='bottom')
+    ax.plot(lon_v, lat_v, '*', color='#E74C3C', ms=18, zorder=7,
+            markeredgecolor='white', markeredgewidth=0.8)
+    ax.axhline(lat_v, color='gray', ls='-', lw=0.5, alpha=0.4)
+    ax.axvline(lon_v, color='gray', ls='-', lw=0.5, alpha=0.4)
+    pad = r15_deg * 1.3
+    ax.set_xlim(lon_v - pad, lon_v + pad)
+    ax.set_ylim(lat_v - pad, lat_v + pad)
+    ax.set_xlabel('Longitud (°)')
+    ax.set_ylabel('Latitud (°)')
+    ax.set_title('Figura 6. Mapa de ubicación del punto de muestreo')
+    ax.set_aspect('equal')
+    ax.grid(True, alpha=0.30, lw=0.5)
+    ax.text(lon_v, lat_v - pad * 0.08,
+            f'({lat_v:.4f}°, {lon_v:.4f}°)', ha='center', va='top',
+            fontsize=8, color='#C0392B',
+            bbox=dict(boxstyle='round,pad=0.25', facecolor='white', alpha=0.85))
+    arr_x = lon_v + pad * 0.82
+    arr_y = lat_v - pad * 0.85
+    ax.annotate('', xy=(arr_x, arr_y + pad * 0.18),
+                xytext=(arr_x, arr_y),
+                arrowprops=dict(arrowstyle='->', color='black', lw=1.8))
+    ax.text(arr_x, arr_y + pad * 0.22, 'N', ha='center',
+            fontsize=10, fontweight='bold')
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='#E74C3C', ls='--', lw=1.8, label='Radio 2 km (cauce)'),
+        Line2D([0], [0], color='#2980B9', ls=':',  lw=1.8, label='Radio 15 km (cuenca)'),
+        Line2D([0], [0], marker='*', color='#E74C3C', ls='none',
+               ms=12, markeredgecolor='white', markeredgewidth=0.6,
+               label='Punto de estudio'),
+    ]
+    ax.legend(handles=legend_elements, loc='upper left', fontsize=8,
+              framealpha=0.9, edgecolor='#aaa')
+    fig.tight_layout()
+    charts['location_map'] = _fig_to_b64(fig)
+
+    return charts
 
 
 def generate_gee_code(lat, lon, d50, d90):
@@ -808,43 +1048,131 @@ def report():
             for d in depths_range
         ]
 
-        return render_template(
-            "report.html",
-            results={
-                "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "lat": lat, "lon": lon,
-                "d50": d50, "d90": d90, "rho_s": rho_s,
-                "temp": temp, "depth": depth, "velocity": velocity,
-                "slope": round(slope, 8),
-                "slope_pct": round(slope * 100, 5),
-                "rho_w": round(rho_w, 2),
-                "nu": f"{nu:.4e}",
-                "s": round(s, 4),
-                "ws": round(ws, 6),
-                "dstar": round(dstar, 2),
-                "tau_c": round(tau_c, 4),
-                "theta_c": round(theta_c, 4),
-                "tau_0": round(tau_0, 4),
-                "theta_0": round(theta_0, 4),
-                "u_star": round(u_star, 5),
-                "froude": round(froude, 4),
-                "z_rouse": round(z_rouse, 2),
-                "transport_mode": rouse_mode(z_rouse),
-                "classification": classification,
-                "mobile": theta_0 > theta_c,
-                "ratio": ratio,
-                "rosgen_type": rosgen_type,
-                "rosgen_desc": rosgen_desc,
-                "sensitivity": sensitivity,
-                "transport": {
-                    "meyer_peter_muller": round(qb_mpm, 8),
-                    "engelund_hansen": round(qt_eh, 8),
-                    "van_rijn": round(qb_vr, 8),
-                },
+        results = {
+            "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "lat": lat, "lon": lon,
+            "d50": d50, "d90": d90, "rho_s": rho_s,
+            "temp": temp, "depth": depth, "velocity": velocity,
+            "slope": round(slope, 8),
+            "slope_pct": round(slope * 100, 5),
+            "rho_w": round(rho_w, 2),
+            "nu": f"{nu:.4e}",
+            "s": round(s, 4),
+            "ws": round(ws, 6),
+            "dstar": round(dstar, 2),
+            "tau_c": round(tau_c, 4),
+            "theta_c": round(theta_c, 4),
+            "tau_0": round(tau_0, 4),
+            "theta_0": round(theta_0, 4),
+            "u_star": round(u_star, 5),
+            "froude": round(froude, 4),
+            "z_rouse": round(z_rouse, 2),
+            "transport_mode": rouse_mode(z_rouse),
+            "classification": classification,
+            "mobile": theta_0 > theta_c,
+            "ratio": ratio,
+            "rosgen_type": rosgen_type,
+            "rosgen_desc": rosgen_desc,
+            "sensitivity": sensitivity,
+            "transport": {
+                "meyer_peter_muller": round(qb_mpm, 8),
+                "engelund_hansen": round(qt_eh, 8),
+                "van_rijn": round(qb_vr, 8),
             },
-        )
+        }
+        results["charts"] = generate_charts(results)
+        return render_template("report.html", results=results)
     except Exception as e:
         return str(e), 400
+
+
+@app.route("/report/pdf")
+def report_pdf():
+    try:
+        lat = float(request.args.get("lat", -16.5))
+        lon = float(request.args.get("lon", -68.15))
+        d50 = float(request.args.get("d50", 0.45))
+        d90 = float(request.args.get("d90", 0.9))
+        rho_s = float(request.args.get("rho_s", 2650))
+        depth = float(request.args.get("depth", 1.0))
+        velocity = float(request.args.get("velocity", 1.0))
+        temp = float(request.args.get("temp", 20))
+        slope = float(request.args.get("slope", 0.005))
+
+        rho_w = calculate_water_density(temp)
+        nu = calculate_kinematic_viscosity(temp)
+        s = calculate_specific_gravity(rho_s, rho_w)
+        ws = calculate_fall_velocity(d50, s, nu)
+        dstar = calculate_dimensionless_particle_parameter(d50, s, nu)
+        tau_c, theta_c = calculate_critical_shear_stress_shields(dstar, s, rho_w, d50)
+        tau_0 = rho_w * G * depth * slope
+        theta_0 = tau_0 / ((s - 1) * rho_w * G * (d50 / 1000))
+        u_star = math.sqrt(max(tau_0 / rho_w, 0))
+        froude = velocity / math.sqrt(G * depth)
+        classification, _ = classify_particle(d50)
+        qb_mpm = meyer_peter_muller(s, d50, slope, depth, rho_w)
+        qt_eh = engelund_hansen(velocity, depth, slope, d50, s, rho_w)
+        qb_vr = van_rijn_bedload(velocity, depth, d50, dstar, s, rho_w, nu)
+        z_rouse = ws / (0.41 * u_star) if u_star > 1e-9 else 999
+        ratio = round(theta_0 / theta_c, 3) if theta_c > 0 else "∞"
+        rosgen_type, rosgen_desc = rosgen_classify(slope, d50, froude)
+
+        depths_range = [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+        sensitivity = [
+            {
+                "depth": d,
+                "mpm": round(meyer_peter_muller(s, d50, slope, d, rho_w), 8),
+                "eh": round(engelund_hansen(velocity, d, slope, d50, s, rho_w), 8),
+                "vr": round(van_rijn_bedload(velocity, d, d50, dstar, s, rho_w, nu), 8),
+            }
+            for d in depths_range
+        ]
+
+        results = {
+            "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "lat": lat, "lon": lon,
+            "d50": d50, "d90": d90, "rho_s": rho_s,
+            "temp": temp, "depth": depth, "velocity": velocity,
+            "slope": round(slope, 8),
+            "slope_pct": round(slope * 100, 5),
+            "rho_w": round(rho_w, 2),
+            "nu": f"{nu:.4e}",
+            "s": round(s, 4),
+            "ws": round(ws, 6),
+            "dstar": round(dstar, 2),
+            "tau_c": round(tau_c, 4),
+            "theta_c": round(theta_c, 4),
+            "tau_0": round(tau_0, 4),
+            "theta_0": round(theta_0, 4),
+            "u_star": round(u_star, 5),
+            "froude": round(froude, 4),
+            "z_rouse": round(z_rouse, 2),
+            "transport_mode": rouse_mode(z_rouse),
+            "classification": classification,
+            "mobile": theta_0 > theta_c,
+            "ratio": ratio,
+            "rosgen_type": rosgen_type,
+            "rosgen_desc": rosgen_desc,
+            "sensitivity": sensitivity,
+            "transport": {
+                "meyer_peter_muller": round(qb_mpm, 8),
+                "engelund_hansen": round(qt_eh, 8),
+                "van_rijn": round(qb_vr, 8),
+            },
+        }
+        results["charts"] = generate_charts(results)
+
+        html_str = render_template("report_pdf.html", results=results)
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html_str).write_pdf()
+        buf = io.BytesIO(pdf_bytes)
+        buf.seek(0)
+        filename = f"Informe_Sedimentos_Bolivia_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+        return send_file(buf, mimetype='application/pdf',
+                         as_attachment=True, download_name=filename)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return str(e), 500
 
 
 @app.route("/gee_code")
