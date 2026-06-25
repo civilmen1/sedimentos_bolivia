@@ -74,8 +74,18 @@
         <p>© 2024 - Sistema de Cálculo de Sedimentos</p>
     </div>
 
-    <div class="no-print" style="margin-top: 30px; text-align: center;">
+    {% if not is_pdf %}
+    <div class="no-print" style="margin-top: 30px; text-align: center; display: flex; justify-content: center; gap: 10px;">
         <button onclick="window.print()" style="padding: 10px 20px; background: #059669; color: white; border: none; border-radius: 5px; cursor: pointer;">Imprimir Informe</button>
+        <button onclick="downloadPDF()" style="padding: 10px 20px; background: #1e3a8a; color: white; border: none; border-radius: 5px; cursor: pointer;">Descargar PDF</button>
     </div>
+
+    <script>
+    function downloadPDF() {
+        const params = new URLSearchParams(window.location.search);
+        window.location.href = '/download_report?' + params.toString();
+    }
+    </script>
+    {% endif %}
 </body>
 </html>
