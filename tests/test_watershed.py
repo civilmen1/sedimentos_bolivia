@@ -23,13 +23,14 @@ def test_synthetic_watershed_structure():
     for lon, lat in wd["boundary"]:
         assert isinstance(lon, float)
         assert isinstance(lat, float)
-    # Máscara de drenaje booleana con al menos un cauce
-    assert wd["stream_mask"].dtype == bool
-    assert wd["stream_mask"].any()
-    # Extent (lon_min, lon_max, lat_min, lat_max)
-    lon_min, lon_max, lat_min, lat_max = wd["extent"]
-    assert lon_min < lon_max
-    assert lat_min < lat_max
+    # Cauce principal y afluentes como polilíneas lon/lat
+    assert len(wd["channel"]) >= 2
+    for lon, lat in wd["channel"]:
+        assert isinstance(lon, float) and isinstance(lat, float)
+    assert isinstance(wd["tributaries"], list)
+    assert len(wd["tributaries"]) >= 1
+    for trib in wd["tributaries"]:
+        assert len(trib) >= 2
 
 
 def test_synthetic_watershed_is_deterministic():
@@ -37,7 +38,8 @@ def test_synthetic_watershed_is_deterministic():
     a = app_module._synthetic_watershed(-17.0, -66.0, 15.0)
     b = app_module._synthetic_watershed(-17.0, -66.0, 15.0)
     assert a["boundary"] == b["boundary"]
-    assert np.array_equal(a["stream_mask"], b["stream_mask"])
+    assert a["channel"] == b["channel"]
+    assert a["tributaries"] == b["tributaries"]
 
 
 def test_get_watershed_overlay_caches(monkeypatch):
@@ -99,6 +101,48 @@ def test_cartographic_map_accepts_watershed_overlay(monkeypatch):
         watershed_data=wd,
     )
     assert png.startswith("data:image/png;base64,")
+
+
+def test_utm_epsg_southern_and_northern():
+    """utm_epsg devuelve el huso correcto en ambos hemisferios."""
+    # La Paz, Bolivia → UTM 19S → EPSG:32719
+    assert app_module.utm_epsg(-16.5, -68.15) == 32719
+    # Hemisferio norte mismo huso → EPSG:32619
+    assert app_module.utm_epsg(16.5, -68.15) == 32619
+
+
+def test_delineate_watershed_from_dem_synthetic():
+    """
+    El geoproceso pysheds delimita una cuenca a partir de un DEM en UTM y
+    devuelve geometrías en lon/lat alrededor del punto de muestreo.
+    """
+    import numpy as _np
+    import pyproj
+    from affine import Affine
+
+    lat, lon = -16.5, -68.15
+    epsg = app_module.utm_epsg(lat, lon)
+    to_utm = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+    xc, yc = to_utm.transform(lon, lat)
+
+    scale, n = 18.75, 600
+    half = n * scale / 2.0
+    transform = Affine(scale, 0, xc - half, 0, -scale, yc + half)
+
+    cols, rows = _np.meshgrid(_np.arange(n), _np.arange(n))
+    chan_col = n / 2 + 40 * _np.sin(rows / 90.0)
+    dem = (_np.abs(cols - chan_col) * 1.5 + (n - rows) * 0.8 + 3000.0)
+
+    res = app_module.delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
+    assert res is not None
+    assert res["is_real"] is True
+    assert len(res["boundary"]) >= 4
+    assert len(res["channel"]) >= 2
+    # El parteaguas debe rodear aproximadamente el punto de muestreo
+    lons = [p[0] for p in res["boundary"]]
+    lats = [p[1] for p in res["boundary"]]
+    assert min(lons) - 0.05 <= lon <= max(lons) + 0.05
+    assert min(lats) - 0.05 <= lat <= max(lats) + 0.05
 
 
 if __name__ == "__main__":

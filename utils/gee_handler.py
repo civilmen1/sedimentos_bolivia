@@ -148,9 +148,9 @@ LAYER_META = {
     "watershed": {
         "vmin": 0, "vmax": 1,
         "palette": ["#cce5ff", "#4a90d9", "#003399"],
-        "source": "HydroSHEDS v1 / WWF + Sentinel-2 L2A / ESA — 10–30 m",
+        "source": "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pysheds + Sentinel-2 L2A",
         "title": "Cuenca Hidrográfica y Red de Drenaje",
-        "legend": "Delimitación de Cuenca",
+        "legend": "Elevación (m s.n.m.)",
     },
 }
 
@@ -197,7 +197,92 @@ def _layer_image(map_type, region):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# CUENCA HIDROGRÁFICA Y RED DE DRENAJE
+# DEM COPERNICUS DE ALTA RESOLUCIÓN (para geoproceso hidrológico)
+# ════════════════════════════════════════════════════════════════════════════
+
+def utm_epsg(lat, lon):
+    """EPSG del huso UTM WGS84 que contiene (lat, lon)."""
+    zone = int((lon + 180) / 6) + 1
+    return (32600 + zone) if lat >= 0 else (32700 + zone)
+
+
+def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
+    """
+    Descarga el DEM Copernicus GLO-30 con remuestreo bicúbico (downscaling) a
+    `scale_m` metros, reproyectado al huso UTM local, como array float.
+
+    Retorna (dem_array, transform_affine, epsg, extent_lonlat) o None si GEE
+    no está disponible o la descarga falla.
+      - dem_array  : numpy 2-D float (metros), nodata → np.nan
+      - transform  : affine.Affine del raster en UTM
+      - epsg       : int del huso UTM (p.ej. 32719)
+      - extent     : (lon_min, lon_max, lat_min, lat_max)
+    """
+    if not _GEE_READY:
+        return None
+    try:
+        import requests
+        import numpy as np
+        import rasterio
+        from rasterio.io import MemoryFile
+
+        region = _build_region(lat, lon, radius_km)
+        epsg = utm_epsg(lat, lon)
+
+        dem = (ee.ImageCollection("COPERNICUS/DEM/GLO30")
+               .select("DEM").mosaic()
+               .resample("bicubic"))
+
+        url = dem.getDownloadURL({
+            "region": region,
+            "scale": scale_m,
+            "crs": f"EPSG:{epsg}",
+            "format": "GEO_TIFF",
+        })
+        resp = requests.get(url, timeout=180)
+        resp.raise_for_status()
+
+        with MemoryFile(resp.content) as mf:
+            with mf.open() as ds:
+                arr = ds.read(1).astype("float64")
+                transform = ds.transform
+                nod = ds.nodata
+        if nod is not None:
+            arr[arr == nod] = np.nan
+        arr[arr < -1000] = np.nan
+
+        deg_lat = radius_km / 111.0
+        deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+        extent = (lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat)
+        return arr, transform, epsg, extent
+    except Exception as e:
+        print(f"fetch_copernicus_dem failed: {e}")
+        return None
+
+
+def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=700):
+    """Fondo satelital Sentinel-2 color verdadero (B4-B3-B2) como array RGB."""
+    if not _GEE_READY:
+        return None
+    try:
+        import requests
+        from matplotlib import image as mpimg
+
+        region = _build_region(lat, lon, radius_km)
+        s2 = _s2_median(region).select(["B4", "B3", "B2"])
+        url = s2.visualize(min=0, max=3000, gamma=1.4).getThumbURL({
+            "region": region, "dimensions": dimensions, "format": "png",
+        })
+        resp = requests.get(url, timeout=90)
+        resp.raise_for_status()
+        return mpimg.imread(io.BytesIO(resp.content))
+    except Exception as e:
+        print(f"fetch_s2_rgb failed: {e}")
+        return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# CUENCA HIDROGRÁFICA Y RED DE DRENAJE (HydroSHEDS — respaldo)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _extract_polygon_coords(geojson):
