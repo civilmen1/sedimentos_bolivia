@@ -145,6 +145,13 @@ LAYER_META = {
         "title": "Frecuencia de Inundación — JRC Global Surface Water",
         "legend": "Frecuencia de inundación (%)",
     },
+    "watershed": {
+        "vmin": 0, "vmax": 1,
+        "palette": ["#cce5ff", "#4a90d9", "#003399"],
+        "source": "HydroSHEDS v1 / WWF + Sentinel-2 L2A / ESA — 10–30 m",
+        "title": "Cuenca Hidrográfica y Red de Drenaje",
+        "legend": "Delimitación de Cuenca",
+    },
 }
 
 
@@ -187,6 +194,92 @@ def _layer_image(map_type, region):
                 .select("occurrence").clip(region))
 
     raise ValueError(f"Capa desconocida: {map_type}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# CUENCA HIDROGRÁFICA Y RED DE DRENAJE
+# ════════════════════════════════════════════════════════════════════════════
+
+def _extract_polygon_coords(geojson):
+    """Extrae el anillo exterior de un GeoJSON Polygon o MultiPolygon."""
+    if not geojson:
+        return []
+    t = geojson.get("type", "")
+    if t == "Polygon":
+        return geojson["coordinates"][0]
+    if t == "MultiPolygon":
+        rings = [poly[0] for poly in geojson["coordinates"]]
+        return max(rings, key=len)
+    return []
+
+
+def fetch_watershed_data(lat, lon, radius_km=15.0):
+    """
+    Delimita la cuenca hidrográfica y extrae la red de drenaje usando GEE.
+
+    Retorna dict con:
+      'boundary'    : lista de [lon, lat] del polígono de cuenca
+      'stream_mask' : numpy bool array (H×W) — True donde hay cauce
+      'rgb'         : numpy RGBA — fondo satelital Sentinel-2 color verdadero
+      'extent'      : (lon_min, lon_max, lat_min, lat_max)
+      'is_real'     : True
+    Retorna None si GEE no está disponible o falla.
+    """
+    if not _GEE_READY:
+        return None
+    try:
+        import requests
+        from matplotlib import image as mpimg
+        import numpy as np
+
+        point = ee.Geometry.Point([lon, lat])
+        region = _build_region(lat, lon, radius_km)
+
+        deg_lat = radius_km / 111.0
+        deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+        extent = (lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat)
+
+        # 1. Límite de cuenca — HydroSHEDS nivel 12 (sub-cuencas)
+        basins = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_12")
+        basin_feat = basins.filterBounds(point).first()
+        basin_geom = basin_feat.geometry()
+        clipped = basin_geom.intersection(region).simplify(maxError=100)
+        basin_info = clipped.getInfo()
+        boundary = _extract_polygon_coords(basin_info)
+
+        # 2. Red de drenaje — umbral de acumulación de flujo HydroSHEDS 15 seg
+        flow_acc = ee.Image("WWF/HydroSHEDS/15ACC").clip(region)
+        streams = flow_acc.gt(300).selfMask()
+        stream_url = streams.visualize(
+            min=0, max=1, palette=["000000", "1155bb"]
+        ).getThumbURL({"region": region, "dimensions": 512, "format": "png"})
+        resp_s = requests.get(stream_url, timeout=60)
+        resp_s.raise_for_status()
+        sarr = mpimg.imread(io.BytesIO(resp_s.content))
+        if sarr.ndim == 3 and sarr.shape[2] >= 3:
+            stream_mask = (sarr[:, :, 2] > 0.25) & (sarr[:, :, 0] < 0.15)
+        else:
+            stream_mask = sarr[:, :, 0] > 0.5
+
+        # 3. Fondo satelital — Sentinel-2 color verdadero (B4-B3-B2)
+        s2 = _s2_median(region).select(["B4", "B3", "B2"])
+        rgb_url = s2.visualize(min=0, max=3000, gamma=1.4).getThumbURL({
+            "region": region, "dimensions": 700, "format": "png"
+        })
+        resp_rgb = requests.get(rgb_url, timeout=90)
+        resp_rgb.raise_for_status()
+        rgb_arr = mpimg.imread(io.BytesIO(resp_rgb.content))
+
+        return {
+            "boundary": boundary,
+            "stream_mask": stream_mask,
+            "rgb": rgb_arr,
+            "extent": extent,
+            "is_real": True,
+        }
+    except Exception as e:
+        print(f"fetch_watershed_data failed: {e}")
+        return None
 
 
 def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=700):

@@ -813,11 +813,11 @@ table tfoot td {
   </table>
   <p class="tbl-note no-indent"><strong>Nota.</strong> Todos los productos se procesan en proyección WGS84 (EPSG:4326). Los mapas de la Sección 8.6 se obtienen directamente desde Google Earth Engine y se renderizan con marco cartográfico (grilla UTM, norte, escala, leyenda). Resoluciones indicadas son las nativas del producto fuente.</p>
 
-  <h2>8.6 Mapas Temáticos Satelitales</h2>
-  <p>Los siguientes mapas se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración (configure la cuenta de servicio GEE para datos satelitales reales){% endif %}, incorporando grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda y cartela de autoría conforme a estándares cartográficos.</p>
+  <h2>8.6 Cuenca Hidrográfica y Mapas Temáticos Satelitales</h2>
+  <p>El primer mapa delimita la cuenca hidrográfica (HydroSHEDS nivel 12) con su red de drenaje sobre fondo satelital. Los mapas siguientes muestran variables hidrosedimentológicas; todos incluyen el límite de cuenca (rojo) y la red de drenaje (azul) como capas de referencia superpuestas. Fuente de datos: {% if results.maps_source == 'real' %}Google Earth Engine (datos satelitales reales){% else %}datos sintéticos de demostración — configure <code>EE_SERVICE_ACCOUNT_JSON</code> para datos reales{% endif %}. Grilla UTM WGS84 c/2500 m. Autor: Ing. Luis Franco Guarachi.</p>
 
   {% if results.maps %}
-  {% set order = ['dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
+  {% set order = ['watershed','dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
   {% for mt in order %}
   {% if results.maps[mt] %}
   <figure class="apa-figure" style="page-break-inside:avoid;">
@@ -890,7 +890,7 @@ table tfoot td {
   <p>El código fuente de la aplicación de cálculo está disponible en el repositorio GitHub del proyecto. Los modelos implementados siguen las ecuaciones documentadas en Ramirez Quispe (2021). Para acceder al código fuente completo, visitar: [URL del repositorio].</p>
 
   <h2>Apéndice E: Mapas Temáticos de Google Earth Engine</h2>
-  <p>Los mapas temáticos (DEM, Pendiente, NDVI, NDWI, NDTI, Coeficiente de Manning, Índice de Riesgo y Frecuencia de Inundación JRC) se obtienen automáticamente desde Google Earth Engine y se presentan en la Sección 8.6 de este informe, así como en la galería de mapas accesible desde el botón "Ver Mapas". Cada mapa incluye grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda, autor y fuente. Fuentes: SRTM 30 m (DEM/pendiente), Sentinel-2 L2A 10 m (índices espectrales), ESA WorldCover 2021 10 m (Manning) y JRC Global Surface Water 30 m (inundación).</p>
+  <p>Los mapas temáticos se obtienen automáticamente desde Google Earth Engine y se presentan en la Sección 8.6 de este informe y en la galería accesible desde "Ver Mapas". El primer mapa muestra la cuenca hidrográfica delimitada (HydroSHEDS nivel 12) con la red de drenaje sobre fondo satelital Sentinel-2. Los mapas siguientes muestran: DEM (SRTM 30 m), Pendiente, NDVI, NDWI, NDTI (Sentinel-2 10 m, mediana 2020–2023), Coeficiente de Manning (ESA WorldCover 10 m) e Índice de Riesgo + Frecuencia de Inundación JRC. Todos los mapas superponen el límite de cuenca (línea roja) y la red de drenaje (línea azul), grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala y cartela de autoría.</p>
 
   <h2>Apéndice F: Fotografías del Sitio</h2>
   <p>[Adjuntar fotografías de: (1) sección transversal aforada, (2) material de lecho y muestras, (3) condiciones de flujo aguas arriba y aguas abajo, (4) obras de infraestructura cercanas.]</p>

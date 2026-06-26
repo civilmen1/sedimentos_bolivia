@@ -204,7 +204,7 @@ body {
 
 <!-- ═══ MAPS GRID ═══ -->
 <div class="maps-grid">
-  {% set map_order = ['dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
+  {% set map_order = ['watershed','dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
   {% for idx, mt in enumerate(map_order) %}
   {% if maps[mt] %}
   <div class="map-card">
