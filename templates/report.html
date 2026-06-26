@@ -811,7 +811,22 @@ table tfoot td {
       <tr><td><em>Tabla4</em> — Estadísticas Hidrológicas</td><td>CHIRPS + JRC</td><td class="td-num">CSV</td><td>Precipitación media mensual y frecuencia de inundación por año</td></tr>
     </tbody>
   </table>
-  <p class="tbl-note no-indent"><strong>Nota.</strong> Todos los archivos GeoTIFF se exportan en proyección WGS84 (EPSG:4326) a la carpeta "GEE_Sedimentos_Bolivia" en Google Drive del usuario. El código GEE completo se accede desde el botón "Código GEE" en la barra de acciones. Resoluciones indicadas son las nativas del producto fuente.</p>
+  <p class="tbl-note no-indent"><strong>Nota.</strong> Todos los productos se procesan en proyección WGS84 (EPSG:4326). Los mapas de la Sección 8.6 se obtienen directamente desde Google Earth Engine y se renderizan con marco cartográfico (grilla UTM, norte, escala, leyenda). Resoluciones indicadas son las nativas del producto fuente.</p>
+
+  <h2>8.6 Mapas Temáticos Satelitales</h2>
+  <p>Los siguientes mapas se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración (configure la cuenta de servicio GEE para datos satelitales reales){% endif %}, incorporando grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda y cartela de autoría conforme a estándares cartográficos.</p>
+
+  {% if results.maps %}
+  {% set order = ['dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
+  {% for mt in order %}
+  {% if results.maps[mt] %}
+  <figure class="apa-figure" style="page-break-inside:avoid;">
+    <img src="{{ results.maps[mt] }}" alt="{{ results.map_titles[mt] }}">
+    <figcaption><em>Mapa {{ loop.index }}.</em> {{ results.map_titles[mt] }}. Fuente: {{ results.map_sources[mt] }}. Grilla UTM WGS84 c/2500 m. Autor: Ing. Luis Franco Guarachi.</figcaption>
+  </figure>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
 
   <!-- CAPÍTULO 9 -->
   <h1>9. Impactos sobre Infraestructura</h1>
@@ -874,8 +889,8 @@ table tfoot td {
   <h2>Apéndice D: Código Python de Cálculo</h2>
   <p>El código fuente de la aplicación de cálculo está disponible en el repositorio GitHub del proyecto. Los modelos implementados siguen las ecuaciones documentadas en Ramirez Quispe (2021). Para acceder al código fuente completo, visitar: [URL del repositorio].</p>
 
-  <h2>Apéndice E: Código Google Earth Engine y Mapas</h2>
-  <p>El código Python para la generación de los nueve mapas temáticos (DEM + Hillshade, Red Hidrográfica, Pendiente, Cobertura de Suelo, NDVI, NDWI, NDTI, Migración Lateral, Zonas de Riesgo) se presenta en la página de Código GEE accesible desde la calculadora. Los mapas se exportan a Google Drive en la carpeta "GEE_Sedimentos_Bolivia" con resolución de 30 m (mapas DEM/pendiente) y 10 m (mapas Sentinel-2).</p>
+  <h2>Apéndice E: Mapas Temáticos de Google Earth Engine</h2>
+  <p>Los mapas temáticos (DEM, Pendiente, NDVI, NDWI, NDTI, Coeficiente de Manning, Índice de Riesgo y Frecuencia de Inundación JRC) se obtienen automáticamente desde Google Earth Engine y se presentan en la Sección 8.6 de este informe, así como en la galería de mapas accesible desde el botón "Ver Mapas". Cada mapa incluye grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda, autor y fuente. Fuentes: SRTM 30 m (DEM/pendiente), Sentinel-2 L2A 10 m (índices espectrales), ESA WorldCover 2021 10 m (Manning) y JRC Global Surface Water 30 m (inundación).</p>
 
   <h2>Apéndice F: Fotografías del Sitio</h2>
   <p>[Adjuntar fotografías de: (1) sección transversal aforada, (2) material de lecho y muestras, (3) condiciones de flujo aguas arriba y aguas abajo, (4) obras de infraestructura cercanas.]</p>
@@ -913,10 +928,6 @@ table tfoot td {
 
 <!-- ══════════ BOTONES DE ACCIÓN ══════════ -->
 <div class="action-bar">
-  <a class="btn-action btn-gee"
-     href="/gee_code?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}">
-    🌍 Código GEE
-  </a>
   <a class="btn-action" style="background:#1e3a5f; color:#fff;"
      href="/maps?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}">
     🗺️ Ver Mapas

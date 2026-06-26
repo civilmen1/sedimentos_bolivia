@@ -319,7 +319,22 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
     <tr><td><em>Tabla4</em> Estadísticas Hid.</td><td>CHIRPS+JRC</td><td class="td-num">CSV</td><td>Precipitación mensual y frecuencia inund.</td></tr>
   </tbody>
 </table>
-<p class="tbl-note no-indent"><strong>Nota.</strong> GeoTIFF exportados en EPSG:4326 a carpeta "GEE_Sedimentos_Bolivia" en Google Drive. Código GEE disponible en el repositorio del proyecto.</p>
+<p class="tbl-note no-indent"><strong>Nota.</strong> Productos procesados en EPSG:4326. Los mapas de la Sección 8.5 se obtienen directamente desde Google Earth Engine.</p>
+
+<h2>8.5 Mapas Temáticos Satelitales</h2>
+<p>Los siguientes mapas se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración{% endif %}, con grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda y cartela de autoría (Ing. Luis Franco Guarachi).</p>
+
+{% if results.maps %}
+{% set order = ['dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
+{% for mt in order %}
+{% if results.maps[mt] %}
+<figure>
+  <img src="{{ results.maps[mt] }}" alt="{{ results.map_titles[mt] }}">
+  <figcaption><em>Mapa {{ loop.index }}.</em> {{ results.map_titles[mt] }}. Fuente: {{ results.map_sources[mt] }}. Grilla UTM WGS84 c/2500 m. Autor: Ing. Luis Franco Guarachi.</figcaption>
+</figure>
+{% endif %}
+{% endfor %}
+{% endif %}
 
 <!-- ═══════════════════ CAP. 9 ═══════════════════ -->
 <h1>9. Impactos sobre Infraestructura</h1>
@@ -348,7 +363,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <p><strong>Apéndice B.</strong> Curva granulométrica (Figura 1, obtenida por tamizado ASTM D422 / NB 1075).</p>
 <p><strong>Apéndice C.</strong> Ecuaciones detalladas de Van Rijn (1984) y Meyer-Peter y Müller (1948).</p>
 <p><strong>Apéndice D.</strong> Resultados de modelación numérica HEC-RAS / HEC-HMS.</p>
-<p><strong>Apéndice E.</strong> Código Python GEE para la generación de 15 capas GeoTIFF y 4 tablas CSV.</p>
+<p><strong>Apéndice E.</strong> Mapas temáticos obtenidos automáticamente desde Google Earth Engine (ver Sección 8.5).</p>
 <p><strong>Apéndice F.</strong> Fotografías del sitio de muestreo y registro de campo.</p>
 
 <!-- ═══════════════════ REFERENCIAS ═══════════════════ -->

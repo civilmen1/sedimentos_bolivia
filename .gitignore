@@ -5,3 +5,11 @@ venv/
 .env
 .pytest_cache/
 static/
+
+# Credenciales GEE / Google Cloud — NUNCA versionar
+*.json
+!package.json
+!package-lock.json
+service-account*.json
+gee-*.json
+credentials*.json

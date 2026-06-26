@@ -5,3 +5,5 @@ pandas==2.1.3
 gunicorn==21.2.0
 matplotlib==3.8.2
 weasyprint==60.2
+pydyf==0.10.0
+requests==2.31.0

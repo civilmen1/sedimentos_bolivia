@@ -443,9 +443,9 @@
             class="bg-teal-500 hover:bg-teal-400 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg whitespace-nowrap text-sm">
             🖨 GENERAR INFORME APA
           </button>
-          <button onclick="openGeeCode()"
-            class="bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg whitespace-nowrap text-sm">
-            🌍 CÓDIGO GEE
+          <button onclick="openMaps()"
+            class="bg-blue-800 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition shadow-lg whitespace-nowrap text-sm">
+            🗺️ VER MAPAS SATELITALES
           </button>
         </div>
       </div>
@@ -725,14 +725,14 @@ function generateReport() {
   window.open('/report?' + p.toString(), '_blank');
 }
 
-function openGeeCode() {
+function openMaps() {
   const p = new URLSearchParams({
     lat:  document.getElementById('lat').value,
     lon:  document.getElementById('lon').value,
     d50:  document.getElementById('d50').value,
     d90:  document.getElementById('d90').value,
   });
-  window.open('/gee_code?' + p.toString(), '_blank');
+  window.open('/maps?' + p.toString(), '_blank');
 }
 </script>
 </body>
