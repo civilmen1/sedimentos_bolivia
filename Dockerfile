@@ -15,4 +15,6 @@ COPY . .
 
 EXPOSE 7860
 
-CMD ["gunicorn", "app:app", "--workers", "2", "--bind", "0.0.0.0:7860", "--timeout", "120"]
+# timeout amplio: la primera petición puede pagar la compilación JIT del
+# geoproceso (mitigada por el warmup en segundo plano). Los mapas se cachean.
+CMD ["gunicorn", "app:app", "--workers", "2", "--bind", "0.0.0.0:7860", "--timeout", "300"]

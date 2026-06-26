@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, send_file
+import os
 import numpy as np
 import math
 import io
@@ -635,6 +636,10 @@ def _add_scale_bar(ax, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5):
 _WATERSHED_CACHE = {}
 _WATERSHED_CACHE_MAX = 16
 
+# Tope del lado de la malla de geoproceso (balance memoria/resolución).
+# Configurable por variable de entorno DELINEATION_MAX_DIM.
+DELINEATION_MAX_DIM = int(os.environ.get("DELINEATION_MAX_DIM", "2048"))
+
 
 def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
     """
@@ -821,8 +826,11 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
     data = None
     if gee_ready():
-        # Escala adaptativa: 12.5 m, acotando la malla a ≤1600 px de lado
-        scale_m = max(12.5, (2 * radius_km * 1000.0) / 1600.0)
+        # Balance memoria/resolución: objetivo 12.5 m, acotando la malla de
+        # geoproceso a ≤ DELINEATION_MAX_DIM px por lado. A 2048 px se obtiene
+        # 12.5 m para radios ≤ ~12.8 km y ~14.6 m para radio 15 km, con un pico
+        # de memoria ~1.2 GB y ~12 s por cuenca (cacheada).
+        scale_m = max(12.5, (2 * radius_km * 1000.0) / DELINEATION_MAX_DIM)
         dem_pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=scale_m)
         if dem_pack is not None:
             dem, transform, epsg, _extent = dem_pack
@@ -2083,6 +2091,33 @@ def maps_view():
     except Exception as e:
         import traceback; traceback.print_exc()
         return str(e), 500
+
+
+def _warmup_geoprocess():
+    """
+    Precompila las funciones numba de pysheds con un DEM diminuto, en un hilo
+    de fondo. Así el primer geoproceso real (cuenca) no paga ~70-80 s de
+    compilación JIT y responde en ~12 s. No bloquea el arranque del servidor.
+    """
+    try:
+        from affine import Affine
+        n = 96
+        cols, rows = np.meshgrid(np.arange(n), np.arange(n))
+        dem = (np.abs(cols - n / 2) * 1.4 + (n - rows) * 0.7 + 3000.0)
+        transform = Affine(20.0, 0, 500000.0, 0, -20.0, 8200000.0)
+        delineate_watershed_from_dem(dem, transform, 32719, -16.5, -68.15)
+        print("Geoprocess JIT warmup completado.")
+    except Exception as e:
+        print(f"Geoprocess JIT warmup omitido: {e}")
+
+
+# Lanza el warmup en segundo plano al importar el módulo (gunicorn importa
+# app:app), sin demorar el bind del puerto.
+try:
+    import threading
+    threading.Thread(target=_warmup_geoprocess, daemon=True).start()
+except Exception as _e:
+    print(f"No se pudo lanzar el warmup: {_e}")
 
 
 if __name__ == "__main__":
