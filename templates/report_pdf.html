@@ -322,7 +322,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <p class="tbl-note no-indent"><strong>Nota.</strong> Productos procesados en EPSG:4326. Los mapas de la Sección 8.5 se obtienen directamente desde Google Earth Engine.</p>
 
 <h2>8.5 Mapas Temáticos Satelitales</h2>
-<p>Los siguientes mapas se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración{% endif %}, con grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda y cartela de autoría (Ing. Luis Franco Guarachi).</p>
+<p>El primer mapa delimita la cuenca a partir del DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) con geoproceso hidrológico pysheds (relleno de depresiones, dirección y acumulación de flujo D8, cuenca de aporte y cauce principal). Los mapas siguientes se recortan a la cuenca y superponen el parteaguas (rojo), el cauce principal (azul oscuro) y la red de drenaje (azul). Se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración{% endif %}, en proyección UTM WGS84, con flecha norte, barra de escala, leyenda y cartela de autoría (Ing. Luis Franco Guarachi).</p>
 
 {% if results.maps %}
 {% set order = ['watershed','dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
@@ -330,7 +330,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 {% if results.maps[mt] %}
 <figure>
   <img src="{{ results.maps[mt] }}" alt="{{ results.map_titles[mt] }}">
-  <figcaption><em>Mapa {{ loop.index }}.</em> {{ results.map_titles[mt] }}. Fuente: {{ results.map_sources[mt] }}. Grilla UTM WGS84 c/2500 m. Autor: Ing. Luis Franco Guarachi.</figcaption>
+  <figcaption><em>Mapa {{ loop.index }}.</em> {{ results.map_titles[mt] }}. Fuente: {{ results.map_sources[mt] }}. Proyección UTM WGS84; cuenca delimitada con parteaguas y cauce principal. Autor: Ing. Luis Franco Guarachi.</figcaption>
 </figure>
 {% endif %}
 {% endfor %}

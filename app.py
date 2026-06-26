@@ -23,7 +23,9 @@ from utils.gee_handler import (
     initialize_gee,
     gee_ready,
     fetch_gee_thumbnail,
-    fetch_watershed_data,
+    fetch_copernicus_dem,
+    fetch_s2_rgb,
+    utm_epsg,
     LAYER_META,
     get_slope_from_dem,
     get_map_url,
@@ -348,7 +350,7 @@ MAP_AUTHOR = "Ing. Luis Franco Guarachi"
 
 # Fuentes satelitales por tipo de mapa
 MAP_SOURCES = {
-    'watershed': "HydroSHEDS v1 / WWF + Sentinel-2 L2A / ESA — 10–30 m",
+    'watershed': "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pysheds + Sentinel-2 L2A",
     'dem':      "SRTM v3 / NASA (2000) — 30 m",
     'slope':    "SRTM v3 + ee.Terrain.slope() / GEE — 30 m",
     'ndvi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
@@ -383,7 +385,7 @@ MAP_TITLES = {
 }
 
 MAP_LEGEND_LABELS = {
-    'watershed': "Delimitación de Cuenca",
+    'watershed': "Elevación (m s.n.m.)",
     'dem':     "Elevación (m s.n.m.)",
     'slope':   "Pendiente (m/m)",
     'ndvi':    "NDVI (−1 a +1)",
@@ -634,19 +636,141 @@ _WATERSHED_CACHE = {}
 _WATERSHED_CACHE_MAX = 16
 
 
+def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
+    """
+    Geoproceso hidrológico sobre un DEM real (Copernicus GLO-30 remuestreado).
+
+    Usa pysheds (relleno de depresiones → dirección de flujo D8 →
+    acumulación de flujo → cuenca de aporte → red de drenaje) para delimitar
+    la cuenca que drena al punto de muestreo y extraer el cauce principal.
+
+    Retorna dict (coordenadas en lon/lat WGS84):
+      'boundary'     : [[lon,lat], ...] anillo cerrado del parteaguas
+      'channel'      : [[lon,lat], ...] cauce principal
+      'tributaries'  : [ [[lon,lat], ...], ... ] afluentes
+      'is_real'      : True
+    o None si el geoproceso falla o la cuenca resulta degenerada.
+    """
+    try:
+        import numpy as _np
+        import pyproj
+        from affine import Affine
+        from pysheds.grid import Grid
+        from pysheds.view import Raster, ViewFinder
+        from skimage import measure
+
+        dem = _np.asarray(dem, dtype=_np.float64)
+        nod = -9999.0
+        dem_clean = _np.where(_np.isfinite(dem), dem, nod)
+        if not isinstance(transform, Affine):
+            transform = Affine(*transform[:6])
+
+        crs = pyproj.CRS.from_epsg(epsg)
+        vf = ViewFinder(affine=transform, shape=dem_clean.shape,
+                        nodata=_np.float64(nod), crs=crs)
+        dem_r = Raster(dem_clean, viewfinder=vf)
+
+        grid = Grid.from_raster(dem_r)
+        filled = grid.fill_depressions(dem_r)
+        inflated = grid.resolve_flats(filled)
+        fdir = grid.flowdir(inflated)
+        acc = grid.accumulation(fdir)
+        acc_arr = _np.asarray(acc)
+
+        acc_max = float(_np.nanmax(acc_arr))
+        if not _np.isfinite(acc_max) or acc_max < 50:
+            return None
+
+        # Punto de descarga: celda de alta acumulación más cercana al muestreo
+        to_utm = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+        x_pt, y_pt = to_utm.transform(lon, lat)
+        hi_mask = Raster((acc_arr > acc_max * 0.02).astype(_np.uint8),
+                         viewfinder=acc.viewfinder)
+        x_snap, y_snap = grid.snap_to_mask(hi_mask, (x_pt, y_pt))
+
+        catch = grid.catchment(x=x_snap, y=y_snap, fdir=fdir,
+                               xytype='coordinate')
+        catch_arr = _np.asarray(catch) > 0
+        if int(catch_arr.sum()) < 30:
+            return None
+
+        to_ll = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True)
+
+        def _cells_to_lonlat(contour_rc, step=2):
+            out = []
+            for r, c in contour_rc[::step]:
+                x, y = transform * (c, r)
+                lo, la = to_ll.transform(x, y)
+                out.append([float(lo), float(la)])
+            return out
+
+        # Parteaguas: contorno mayor de la máscara de cuenca
+        contours = measure.find_contours(catch_arr.astype(float), 0.5)
+        if not contours:
+            return None
+        biggest = max(contours, key=len)
+        biggest = measure.approximate_polygon(biggest, tolerance=0.7)
+        boundary = _cells_to_lonlat(biggest, step=1)
+        if len(boundary) < 4:
+            return None
+        if boundary[0] != boundary[-1]:
+            boundary.append(boundary[0])
+
+        # Red de drenaje dentro de la cuenca
+        channel, tributaries = [], []
+        try:
+            grid.clip_to(Raster(catch_arr.astype(_np.uint8),
+                                viewfinder=fdir.viewfinder))
+            acc_clip = grid.view(acc, nodata=0)
+            fdir_clip = grid.view(fdir, nodata=0)
+            acc_c = _np.asarray(acc_clip)
+            thr = max(float(_np.nanmax(acc_c)) * 0.02, 30.0)
+            net = grid.extract_river_network(
+                fdir_clip,
+                Raster((acc_c > thr).astype(_np.uint8),
+                       viewfinder=fdir_clip.viewfinder))
+            feats = net.get('features', [])
+
+            def _coords_to_lonlat(coords):
+                out = []
+                for x, y in coords:
+                    lo, la = to_ll.transform(x, y)
+                    out.append([float(lo), float(la)])
+                return out
+
+            lines = [_coords_to_lonlat(f['geometry']['coordinates'])
+                     for f in feats if f['geometry']['coordinates']]
+            lines = [ln for ln in lines if len(ln) >= 2]
+            if lines:
+                lines.sort(key=len, reverse=True)
+                channel = lines[0]
+                tributaries = lines[1:16]
+        except Exception as e:
+            print(f"river network extraction failed: {e}")
+
+        return {
+            "boundary": boundary,
+            "channel": channel,
+            "tributaries": tributaries,
+            "is_real": True,
+        }
+    except Exception as e:
+        print(f"delineate_watershed_from_dem failed: {e}")
+        return None
+
+
 def _synthetic_watershed(lat, lon, radius_km=15.0):
     """
-    Genera cuenca y red de drenaje sintéticas (fallback sin GEE).
-    Retorna dict compatible con fetch_watershed_data().
+    Genera cuenca, cauce principal y afluentes sintéticos (fallback sin GEE).
+    Todas las geometrías en lon/lat WGS84.
     """
     seed = int(abs(lat * 100) + abs(lon * 100)) % 2**31
     rng = np.random.default_rng(seed)
 
     deg_lat = radius_km / 111.0
     deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
-    extent = (lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat)
 
-    # Límite de cuenca — polígono irregular
+    # Parteaguas — polígono irregular
     n_pts = 72
     angles = np.linspace(0, 2 * math.pi, n_pts, endpoint=False)
     radii = (0.80 + 0.12 * np.sin(4 * angles + 0.8)
@@ -656,56 +780,53 @@ def _synthetic_watershed(lat, lon, radius_km=15.0):
     bnd_lons = (lon + deg_lon * radii * np.cos(angles)).tolist()
     bnd_lats = (lat + deg_lat * radii * np.sin(angles)).tolist()
     boundary = [[bnd_lons[i], bnd_lats[i]] for i in range(n_pts)]
-    boundary.append(boundary[0])   # cerrar anillo
+    boundary.append(boundary[0])
 
-    # Red de drenaje — máscara 128×128
-    ny, nx = 128, 128
-    stream_mask = np.zeros((ny, nx), dtype=bool)
-    cx = nx // 2
+    # Cauce principal N-S con meandros (lon/lat)
+    ts = np.linspace(0.92, 0.06, 60)
+    chan_lat = lat + deg_lat * (ts - 0.5) * 1.7
+    chan_lon = lon + deg_lon * 0.18 * np.sin(ts * math.pi * 3.5)
+    channel = [[float(chan_lon[i]), float(chan_lat[i])]
+               for i in range(len(ts))]
 
-    # Cauce principal (N-S con meandros suaves)
-    for j in range(int(ny * 0.05), int(ny * 0.95)):
-        meander = int(4 * math.sin(j * math.pi / ny * 3.5))
-        i0 = cx + meander
-        for di in range(-1, 2):
-            ii = i0 + di
-            if 0 <= ii < nx:
-                stream_mask[j, ii] = True
-
-    # Afluentes desde varias direcciones
-    tribs = [
-        (int(ny * 0.20), cx, -1,  1, 24),  # NE
-        (int(ny * 0.20), cx, -1, -1, 20),  # NW
-        (int(ny * 0.40), cx, -1,  1, 16),  # E
-        (int(ny * 0.55), cx, -1, -1, 14),  # W
-        (int(ny * 0.72), cx,  1,  1, 10),  # SE
-        (int(ny * 0.80), cx,  1, -1,  8),  # SW
-    ]
-    for j0, i0, dj, di, length in tribs:
-        for step in range(length):
-            jj = int(np.clip(j0 + dj * step + int(rng.integers(-1, 2)), 0, ny - 1))
-            ii = int(np.clip(i0 + di * step + int(rng.integers(-1, 2)), 0, nx - 1))
-            stream_mask[max(0, jj - 1):min(ny, jj + 2),
-                        max(0, ii - 1):min(nx, ii + 2)] = True
+    # Afluentes que llegan al cauce principal
+    tributaries = []
+    for frac, side, reach in [(0.78, 1, 0.55), (0.62, -1, 0.48),
+                              (0.46, 1, 0.40), (0.34, -1, 0.34),
+                              (0.20, 1, 0.26)]:
+        idx = int(frac * (len(ts) - 1))
+        c_lon, c_la = channel[idx]
+        tl = np.linspace(0, 1, 14)
+        t_lon = c_lon + side * deg_lon * reach * tl
+        t_la = c_la + deg_lat * reach * 0.5 * tl * (1 if side > 0 else 0.7)
+        tributaries.append([[float(t_lon[k]), float(t_la[k])]
+                            for k in range(len(tl))])
 
     return {
         "boundary": boundary,
-        "stream_mask": stream_mask,
-        "rgb": None,
-        "extent": extent,
+        "channel": channel,
+        "tributaries": tributaries,
         "is_real": False,
     }
 
 
 def get_watershed_overlay(lat, lon, radius_km=15.0):
-    """Retorna datos de cuenca desde caché, GEE o fallback sintético."""
+    """
+    Datos de cuenca desde caché. Con GEE: DEM Copernicus + geoproceso pysheds.
+    Sin GEE o ante cualquier fallo: cuenca sintética de demostración.
+    """
     key = f"{round(lat, 5)}|{round(lon, 5)}|{radius_km}"
     if key in _WATERSHED_CACHE:
         return _WATERSHED_CACHE[key]
 
     data = None
     if gee_ready():
-        data = fetch_watershed_data(lat, lon, radius_km)
+        # Escala adaptativa: 12.5 m, acotando la malla a ≤1600 px de lado
+        scale_m = max(12.5, (2 * radius_km * 1000.0) / 1600.0)
+        dem_pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=scale_m)
+        if dem_pack is not None:
+            dem, transform, epsg, _extent = dem_pack
+            data = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
 
     if data is None:
         data = _synthetic_watershed(lat, lon, radius_km)
@@ -714,6 +835,58 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
         _WATERSHED_CACHE.pop(next(iter(_WATERSHED_CACHE)))
     _WATERSHED_CACHE[key] = data
     return data
+
+
+def _mask_outside_basin(ax, boundary, lon_min, lon_max, lat_min, lat_max):
+    """
+    Atenúa (delimita) todo lo que queda fuera del parteaguas, dibujando un
+    parche gris semitransparente con el polígono de cuenca como 'hueco'.
+    Así cada mapa temático queda recortado visualmente a la cuenca.
+    """
+    if not boundary or len(boundary) < 3:
+        return
+    from matplotlib.path import Path
+    from matplotlib.patches import PathPatch
+
+    # Anillo exterior (marco) en sentido horario
+    outer = [(lon_min, lat_min), (lon_min, lat_max),
+             (lon_max, lat_max), (lon_max, lat_min), (lon_min, lat_min)]
+    inner = [(float(p[0]), float(p[1])) for p in boundary]
+    if inner[0] != inner[-1]:
+        inner.append(inner[0])
+
+    verts = outer + inner
+    codes = ([Path.MOVETO] + [Path.LINETO] * (len(outer) - 2) + [Path.CLOSEPOLY]
+             + [Path.MOVETO] + [Path.LINETO] * (len(inner) - 2) + [Path.CLOSEPOLY])
+    patch = PathPatch(Path(verts, codes), facecolor='white', alpha=0.62,
+                      edgecolor='none', zorder=6)
+    ax.add_patch(patch)
+
+
+def _draw_drainage(ax, watershed_data, zbase=7):
+    """Dibuja afluentes (azul fino), cauce principal (azul grueso) y parteaguas."""
+    tribs = watershed_data.get("tributaries", []) or []
+    for tr in tribs:
+        if len(tr) >= 2:
+            xs = [p[0] for p in tr]
+            ys = [p[1] for p in tr]
+            ax.plot(xs, ys, color='#2b7bba', lw=0.9, alpha=0.85,
+                    solid_capstyle='round', zorder=zbase)
+
+    channel = watershed_data.get("channel", []) or []
+    if len(channel) >= 2:
+        xs = [p[0] for p in channel]
+        ys = [p[1] for p in channel]
+        ax.plot(xs, ys, color='#0b3d91', lw=2.3, alpha=0.95,
+                solid_capstyle='round', zorder=zbase + 1,
+                label='Cauce principal')
+
+    boundary = watershed_data.get("boundary", []) or []
+    if len(boundary) >= 3:
+        bx = [p[0] for p in boundary]
+        by = [p[1] for p in boundary]
+        ax.plot(bx, by, color='#cc0000', lw=2.2, ls='-', alpha=0.95,
+                zorder=zbase + 2, label='Parteaguas')
 
 
 def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
@@ -767,13 +940,13 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         lbl   = MAP_LEGEND_LABELS.get(map_type, "Valor")
 
     # ── Figure layout ────────────────────────────────────────────────────
-    # 14 × 10 in: map (left 74%), colorbar strip (2%), right pad (24%)
-    # rows: top-title (8%), map (82%), bottom-cartouche (10%)
+    # 14 × 10 in: mapa (izq.), barra de color (centro) y panel de info (der.)
+    # separados para evitar la sobreposición de textos.
     fig = plt.figure(figsize=(14, 10), dpi=130, facecolor='white')
 
-    ax_map  = fig.add_axes([0.06, 0.12, 0.68, 0.80])   # main map
-    ax_cb   = fig.add_axes([0.755, 0.20, 0.018, 0.58]) # colorbar
-    ax_info = fig.add_axes([0.79, 0.12, 0.19, 0.80],   # right info panel
+    ax_map  = fig.add_axes([0.055, 0.12, 0.600, 0.80])  # mapa principal (term. 0.655)
+    ax_cb   = fig.add_axes([0.675, 0.20, 0.016, 0.58])  # barra de color
+    ax_info = fig.add_axes([0.760, 0.12, 0.225, 0.80],  # panel de información
                             frameon=False)
 
     # ── Main map ─────────────────────────────────────────────────────────
@@ -786,39 +959,24 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                            extent=[lon_min, lon_max, lat_min, lat_max],
                            origin='upper', aspect='auto', zorder=1)
 
-    # ── Watershed overlay (boundary + drainage network) ──────────────────
+    # ── Watershed overlay (delimita la cuenca + red de drenaje) ──────────
     _has_watershed = watershed_data is not None
     if _has_watershed:
-        # Red de drenaje — máscara semitransparente azul
-        smask = watershed_data.get("stream_mask")
-        if smask is not None:
-            wext = watershed_data.get("extent", extent)
-            blue_rgba = np.zeros((*smask.shape, 4), dtype=np.float32)
-            blue_rgba[smask, 2] = 0.85   # canal azul
-            blue_rgba[smask, 3] = 0.80   # opacidad
-            ax_map.imshow(blue_rgba,
-                          extent=[wext[0], wext[1], wext[2], wext[3]],
-                          origin="upper", aspect="auto", zorder=5)
-
-        # Límite de cuenca — línea roja oscura
-        bnd = watershed_data.get("boundary", [])
-        if bnd:
-            bnd_lons = [c[0] for c in bnd]
-            bnd_lats = [c[1] for c in bnd]
-            ax_map.plot(bnd_lons, bnd_lats,
-                        color="#cc0000", lw=2.2, ls="-", alpha=0.92, zorder=9)
+        # 1) Recorta/atenúa el área fuera de la cuenca (delimitación)
+        if map_type != "watershed":
+            _mask_outside_basin(ax_map, watershed_data.get("boundary", []),
+                                lon_min, lon_max, lat_min, lat_max)
+        # 2) Red de drenaje + cauce principal + parteaguas (capa superior)
+        _draw_drainage(ax_map, watershed_data, zbase=7)
     else:
         # Canal principal aproximado cuando no hay datos de cuenca
         ax_map.plot([lon, lon], [lat_min + deg_lat*0.05, lat_max - deg_lat*0.05],
                     color='#1a5276', lw=1.2, ls='-', alpha=0.55, zorder=4)
 
     # Study point
-    ax_map.plot(lon, lat, marker='*', color='red', ms=14, zorder=10,
+    ax_map.plot(lon, lat, marker='*', color='red', ms=14, zorder=12,
                 markeredgecolor='white', markeredgewidth=0.8,
                 label='Punto de muestreo')
-
-    # UTM grid 2500 m
-    _draw_utm_grid(ax_map, lat_min, lat_max, lon_min, lon_max, spacing_m=2500)
 
     # Scale bar
     _add_scale_bar(ax_map, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5)
@@ -842,15 +1000,21 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         spine.set_linewidth(1.2)
 
     # ── Colorbar ─────────────────────────────────────────────────────────
-    if is_real:
-        norm = Normalize(vmin=meta['vmin'], vmax=meta['vmax'])
-        sm = ScalarMappable(norm=norm, cmap=cmap)
-        sm.set_array([])
-        cb = fig.colorbar(sm, cax=ax_cb)
+    # En el mapa de cuenca con fondo satelital real (RGB) la barra de color
+    # no aporta significado, por lo que se omite.
+    show_cb = not (map_type == "watershed" and is_real)
+    if show_cb:
+        if is_real:
+            norm = Normalize(vmin=meta['vmin'], vmax=meta['vmax'])
+            sm = ScalarMappable(norm=norm, cmap=cmap)
+            sm.set_array([])
+            cb = fig.colorbar(sm, cax=ax_cb)
+        else:
+            cb = fig.colorbar(im, cax=ax_cb)
+        cb.set_label(lbl, fontsize=8, labelpad=4)
+        cb.ax.tick_params(labelsize=7)
     else:
-        cb = fig.colorbar(im, cax=ax_cb)
-    cb.set_label(lbl, fontsize=8, labelpad=4)
-    cb.ax.tick_params(labelsize=7)
+        ax_cb.remove()
 
     # ── Right info panel: north arrow header + legend texts ───────────────
     ax_info.set_xlim(0, 1)
@@ -870,32 +1034,34 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                  fontsize=8, transform=ax_info.transAxes)
 
     if _has_watershed:
-        # Watershed boundary symbol
-        ax_info.plot([0.05, 0.19], [0.862, 0.862], color='#cc0000', lw=2.0,
+        # Parteaguas (límite de cuenca)
+        ax_info.plot([0.05, 0.19], [0.880, 0.880], color='#cc0000', lw=2.0,
                      transform=ax_info.transAxes, clip_on=False)
-        ax_info.text(0.22, 0.862, 'Límite de cuenca', ha='left', va='center',
+        ax_info.text(0.22, 0.880, 'Parteaguas (cuenca)', ha='left', va='center',
                      fontsize=7, transform=ax_info.transAxes, color='#cc0000')
-        # Stream network symbol
-        ax_info.plot([0.05, 0.19], [0.810, 0.810], color='#1155bb', lw=2.0,
+        # Cauce principal
+        ax_info.plot([0.05, 0.19], [0.832, 0.832], color='#0b3d91', lw=2.3,
                      transform=ax_info.transAxes, clip_on=False)
-        ax_info.text(0.22, 0.810, 'Red de drenaje', ha='left', va='center',
-                     fontsize=7, transform=ax_info.transAxes, color='#1155bb')
-        # UTM grid
-        ax_info.plot([0.06, 0.18], [0.760, 0.760], color='#555', lw=0.5, ls='--',
+        ax_info.text(0.22, 0.832, 'Cauce principal', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#0b3d91')
+        # Red de drenaje (afluentes)
+        ax_info.plot([0.05, 0.19], [0.786, 0.786], color='#2b7bba', lw=1.0,
                      transform=ax_info.transAxes, clip_on=False)
-        ax_info.text(0.22, 0.760, 'Grilla UTM\n(c/2500 m)', ha='left', va='center',
-                     fontsize=7, transform=ax_info.transAxes, color='#444')
-        legend_sep_y = 0.720
+        ax_info.text(0.22, 0.786, 'Red de drenaje', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#2b7bba')
+        # Área fuera de cuenca (atenuada)
+        ax_info.add_patch(plt.Rectangle((0.05, 0.730), 0.14, 0.028,
+                          facecolor='white', edgecolor='#999', lw=0.5, alpha=0.85,
+                          transform=ax_info.transAxes, clip_on=False))
+        ax_info.text(0.22, 0.744, 'Fuera de la cuenca', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#666')
+        legend_sep_y = 0.700
     else:
         ax_info.plot([0.06, 0.18], [0.86, 0.86], color='#1a5276', lw=1.5,
                      transform=ax_info.transAxes, clip_on=False)
         ax_info.text(0.22, 0.86, 'Canal principal\n(aprox.)', ha='left', va='center',
                      fontsize=7, transform=ax_info.transAxes, color='#1a5276')
-        ax_info.plot([0.06, 0.18], [0.79, 0.79], color='#555', lw=0.5, ls='--',
-                     transform=ax_info.transAxes, clip_on=False)
-        ax_info.text(0.22, 0.79, 'Grilla UTM\n(c/2500 m)', ha='left', va='center',
-                     fontsize=7, transform=ax_info.transAxes, color='#444')
-        legend_sep_y = 0.74
+        legend_sep_y = 0.80
 
     # Separator
     ax_info.axhline(legend_sep_y, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
@@ -968,8 +1134,10 @@ def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None):
     if watershed_data is None:
         watershed_data = get_watershed_overlay(lat, lon, radius_km)
 
-    # Fondo: imagen satelital RGB (GEE) o DEM sintético como base
-    rgb_bg = watershed_data.get("rgb") if watershed_data else None
+    # Fondo: imagen satelital Sentinel-2 (GEE) o DEM sintético como base
+    rgb_bg = None
+    if gee_ready():
+        rgb_bg = fetch_s2_rgb(lat, lon, radius_km=radius_km)
 
     if rgb_bg is None:
         # Fallback: DEM sintético como fondo topográfico
