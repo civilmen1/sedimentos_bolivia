@@ -1,4 +1,5 @@
 import unittest
+import math
 from unittest.mock import MagicMock, patch
 import sys
 
@@ -17,8 +18,9 @@ class TestGEEHandler(unittest.TestCase):
         mock_ee.Terrain.slope.return_value = mock_img
         mock_img.reduceRegion.return_value.getInfo.return_value = {'slope': 10}
 
+        # get_slope_from_dem returns slope as m/m = tan(angle), not radians
         slope = get_slope_from_dem(-12.0, -77.0)
-        self.assertAlmostEqual(slope, 10 * 3.14159 / 180.0, places=4)
+        self.assertAlmostEqual(slope, math.tan(math.radians(10)), places=4)
 
     @patch('utils.gee_handler.ee')
     def test_get_map_url_mock(self, mock_ee):
