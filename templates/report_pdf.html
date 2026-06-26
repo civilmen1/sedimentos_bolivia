@@ -325,7 +325,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <p>Los siguientes mapas se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración{% endif %}, con grilla UTM WGS84 cada 2500 m, flecha norte, barra de escala, leyenda y cartela de autoría (Ing. Luis Franco Guarachi).</p>
 
 {% if results.maps %}
-{% set order = ['dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
+{% set order = ['watershed','dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
 {% for mt in order %}
 {% if results.maps[mt] %}
 <figure>

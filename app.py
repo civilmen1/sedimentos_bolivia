@@ -23,6 +23,7 @@ from utils.gee_handler import (
     initialize_gee,
     gee_ready,
     fetch_gee_thumbnail,
+    fetch_watershed_data,
     LAYER_META,
     get_slope_from_dem,
     get_map_url,
@@ -347,6 +348,7 @@ MAP_AUTHOR = "Ing. Luis Franco Guarachi"
 
 # Fuentes satelitales por tipo de mapa
 MAP_SOURCES = {
+    'watershed': "HydroSHEDS v1 / WWF + Sentinel-2 L2A / ESA — 10–30 m",
     'dem':      "SRTM v3 / NASA (2000) — 30 m",
     'slope':    "SRTM v3 + ee.Terrain.slope() / GEE — 30 m",
     'ndvi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
@@ -369,6 +371,7 @@ MAP_CMAPS = {
 }
 
 MAP_TITLES = {
+    'watershed': "Cuenca Hidrográfica y Red de Drenaje",
     'dem':     "Modelo Digital de Elevación (DEM) — SRTM 30 m",
     'slope':   "Pendiente del Terreno (S, m/m)",
     'ndvi':    "Índice de Vegetación Normalizado (NDVI)",
@@ -380,6 +383,7 @@ MAP_TITLES = {
 }
 
 MAP_LEGEND_LABELS = {
+    'watershed': "Delimitación de Cuenca",
     'dem':     "Elevación (m s.n.m.)",
     'slope':   "Pendiente (m/m)",
     'ndvi':    "NDVI (−1 a +1)",
@@ -622,23 +626,115 @@ def _add_scale_bar(ax, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5):
             'km', ha='center', va='bottom', fontsize=6.5, color='#111', zorder=7)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# CUENCA HIDROGRÁFICA — caché y datos sintéticos de fallback
+# ════════════════════════════════════════════════════════════════════════════
+
+_WATERSHED_CACHE = {}
+_WATERSHED_CACHE_MAX = 16
+
+
+def _synthetic_watershed(lat, lon, radius_km=15.0):
+    """
+    Genera cuenca y red de drenaje sintéticas (fallback sin GEE).
+    Retorna dict compatible con fetch_watershed_data().
+    """
+    seed = int(abs(lat * 100) + abs(lon * 100)) % 2**31
+    rng = np.random.default_rng(seed)
+
+    deg_lat = radius_km / 111.0
+    deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+    extent = (lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat)
+
+    # Límite de cuenca — polígono irregular
+    n_pts = 72
+    angles = np.linspace(0, 2 * math.pi, n_pts, endpoint=False)
+    radii = (0.80 + 0.12 * np.sin(4 * angles + 0.8)
+             + 0.07 * np.sin(7 * angles + 2.3)
+             + 0.04 * rng.standard_normal(n_pts))
+    radii = np.clip(radii, 0.42, 0.97)
+    bnd_lons = (lon + deg_lon * radii * np.cos(angles)).tolist()
+    bnd_lats = (lat + deg_lat * radii * np.sin(angles)).tolist()
+    boundary = [[bnd_lons[i], bnd_lats[i]] for i in range(n_pts)]
+    boundary.append(boundary[0])   # cerrar anillo
+
+    # Red de drenaje — máscara 128×128
+    ny, nx = 128, 128
+    stream_mask = np.zeros((ny, nx), dtype=bool)
+    cx = nx // 2
+
+    # Cauce principal (N-S con meandros suaves)
+    for j in range(int(ny * 0.05), int(ny * 0.95)):
+        meander = int(4 * math.sin(j * math.pi / ny * 3.5))
+        i0 = cx + meander
+        for di in range(-1, 2):
+            ii = i0 + di
+            if 0 <= ii < nx:
+                stream_mask[j, ii] = True
+
+    # Afluentes desde varias direcciones
+    tribs = [
+        (int(ny * 0.20), cx, -1,  1, 24),  # NE
+        (int(ny * 0.20), cx, -1, -1, 20),  # NW
+        (int(ny * 0.40), cx, -1,  1, 16),  # E
+        (int(ny * 0.55), cx, -1, -1, 14),  # W
+        (int(ny * 0.72), cx,  1,  1, 10),  # SE
+        (int(ny * 0.80), cx,  1, -1,  8),  # SW
+    ]
+    for j0, i0, dj, di, length in tribs:
+        for step in range(length):
+            jj = int(np.clip(j0 + dj * step + int(rng.integers(-1, 2)), 0, ny - 1))
+            ii = int(np.clip(i0 + di * step + int(rng.integers(-1, 2)), 0, nx - 1))
+            stream_mask[max(0, jj - 1):min(ny, jj + 2),
+                        max(0, ii - 1):min(nx, ii + 2)] = True
+
+    return {
+        "boundary": boundary,
+        "stream_mask": stream_mask,
+        "rgb": None,
+        "extent": extent,
+        "is_real": False,
+    }
+
+
+def get_watershed_overlay(lat, lon, radius_km=15.0):
+    """Retorna datos de cuenca desde caché, GEE o fallback sintético."""
+    key = f"{round(lat, 5)}|{round(lon, 5)}|{radius_km}"
+    if key in _WATERSHED_CACHE:
+        return _WATERSHED_CACHE[key]
+
+    data = None
+    if gee_ready():
+        data = fetch_watershed_data(lat, lon, radius_km)
+
+    if data is None:
+        data = _synthetic_watershed(lat, lon, radius_km)
+
+    if len(_WATERSHED_CACHE) >= _WATERSHED_CACHE_MAX:
+        _WATERSHED_CACHE.pop(next(iter(_WATERSHED_CACHE)))
+    _WATERSHED_CACHE[key] = data
+    return data
+
+
 def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
-                              data_array=None, rgb_image=None):
+                              data_array=None, rgb_image=None,
+                              watershed_data=None):
     """
     Generate a professional cartographic map PNG (base64) with:
     – UTM WGS84 grid at 2500 m
     – North arrow, scale bar
     – Title, author, date, source
     – Color legend
+    – Watershed boundary + drainage network overlay (when watershed_data provided)
 
     Parameters
     ----------
-    lat, lon    : centre of the map (decimal degrees WGS84)
-    map_type    : one of MAP_TITLES keys
-    radius_km   : half-side of the map window (km)
-    data_array  : optional numpy 2-D array; synthetic data used if None
-    rgb_image   : optional numpy RGB(A) array rendered by GEE; if provided it is
-                  drawn directly and the legend is built from the layer palette
+    lat, lon        : centre of the map (decimal degrees WGS84)
+    map_type        : one of MAP_TITLES keys
+    radius_km       : half-side of the map window (km)
+    data_array      : optional numpy 2-D array; synthetic data used if None
+    rgb_image       : optional numpy RGB(A) array rendered by GEE
+    watershed_data  : dict from get_watershed_overlay(); draws boundary + streams
     """
     plt.rcParams.update({
         'font.family': 'DejaVu Serif',
@@ -690,12 +786,34 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                            extent=[lon_min, lon_max, lat_min, lat_max],
                            origin='upper', aspect='auto', zorder=1)
 
-    # Channel line (approximate, N-S through centre)
-    ax_map.plot([lon, lon], [lat_min + deg_lat*0.05, lat_max - deg_lat*0.05],
-                color='#1a5276', lw=1.2, ls='-', alpha=0.55, zorder=4)
+    # ── Watershed overlay (boundary + drainage network) ──────────────────
+    _has_watershed = watershed_data is not None
+    if _has_watershed:
+        # Red de drenaje — máscara semitransparente azul
+        smask = watershed_data.get("stream_mask")
+        if smask is not None:
+            wext = watershed_data.get("extent", extent)
+            blue_rgba = np.zeros((*smask.shape, 4), dtype=np.float32)
+            blue_rgba[smask, 2] = 0.85   # canal azul
+            blue_rgba[smask, 3] = 0.80   # opacidad
+            ax_map.imshow(blue_rgba,
+                          extent=[wext[0], wext[1], wext[2], wext[3]],
+                          origin="upper", aspect="auto", zorder=5)
+
+        # Límite de cuenca — línea roja oscura
+        bnd = watershed_data.get("boundary", [])
+        if bnd:
+            bnd_lons = [c[0] for c in bnd]
+            bnd_lats = [c[1] for c in bnd]
+            ax_map.plot(bnd_lons, bnd_lats,
+                        color="#cc0000", lw=2.2, ls="-", alpha=0.92, zorder=9)
+    else:
+        # Canal principal aproximado cuando no hay datos de cuenca
+        ax_map.plot([lon, lon], [lat_min + deg_lat*0.05, lat_max - deg_lat*0.05],
+                    color='#1a5276', lw=1.2, ls='-', alpha=0.55, zorder=4)
 
     # Study point
-    ax_map.plot(lon, lat, marker='*', color='red', ms=14, zorder=8,
+    ax_map.plot(lon, lat, marker='*', color='red', ms=14, zorder=10,
                 markeredgecolor='white', markeredgewidth=0.8,
                 label='Punto de muestreo')
 
@@ -751,18 +869,36 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     ax_info.text(0.22, 0.91, 'Punto de muestreo', ha='left', va='center',
                  fontsize=8, transform=ax_info.transAxes)
 
-    ax_info.plot([0.06, 0.18], [0.86, 0.86], color='#1a5276', lw=1.5,
-                 transform=ax_info.transAxes, clip_on=False)
-    ax_info.text(0.22, 0.86, 'Canal principal\n(aprox.)', ha='left', va='center',
-                 fontsize=7, transform=ax_info.transAxes, color='#1a5276')
-
-    ax_info.plot([0.06, 0.18], [0.79, 0.79], color='#555', lw=0.5, ls='--',
-                 transform=ax_info.transAxes, clip_on=False)
-    ax_info.text(0.22, 0.79, 'Grilla UTM\n(c/2500 m)', ha='left', va='center',
-                 fontsize=7, transform=ax_info.transAxes, color='#444')
+    if _has_watershed:
+        # Watershed boundary symbol
+        ax_info.plot([0.05, 0.19], [0.862, 0.862], color='#cc0000', lw=2.0,
+                     transform=ax_info.transAxes, clip_on=False)
+        ax_info.text(0.22, 0.862, 'Límite de cuenca', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#cc0000')
+        # Stream network symbol
+        ax_info.plot([0.05, 0.19], [0.810, 0.810], color='#1155bb', lw=2.0,
+                     transform=ax_info.transAxes, clip_on=False)
+        ax_info.text(0.22, 0.810, 'Red de drenaje', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#1155bb')
+        # UTM grid
+        ax_info.plot([0.06, 0.18], [0.760, 0.760], color='#555', lw=0.5, ls='--',
+                     transform=ax_info.transAxes, clip_on=False)
+        ax_info.text(0.22, 0.760, 'Grilla UTM\n(c/2500 m)', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#444')
+        legend_sep_y = 0.720
+    else:
+        ax_info.plot([0.06, 0.18], [0.86, 0.86], color='#1a5276', lw=1.5,
+                     transform=ax_info.transAxes, clip_on=False)
+        ax_info.text(0.22, 0.86, 'Canal principal\n(aprox.)', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#1a5276')
+        ax_info.plot([0.06, 0.18], [0.79, 0.79], color='#555', lw=0.5, ls='--',
+                     transform=ax_info.transAxes, clip_on=False)
+        ax_info.text(0.22, 0.79, 'Grilla UTM\n(c/2500 m)', ha='left', va='center',
+                     fontsize=7, transform=ax_info.transAxes, color='#444')
+        legend_sep_y = 0.74
 
     # Separator
-    ax_info.axhline(0.74, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
+    ax_info.axhline(legend_sep_y, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
 
     # Metadata block
     meta = [
@@ -773,7 +909,7 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         ('FECHA:', datetime.now().strftime('%d/%m/%Y')),
         ('PROGRAMA:', 'Sedimentos Bolivia — GEE/Matplotlib'),
     ]
-    y_pos = 0.71
+    y_pos = legend_sep_y - 0.03
     for key, val in meta:
         ax_info.text(0.02, y_pos, key, ha='left', va='top', fontsize=7,
                      fontweight='bold', transform=ax_info.transAxes)
@@ -820,12 +956,50 @@ def _cache_key(lat, lon, mt, radius_km):
     return f"{round(lat,5)}|{round(lon,5)}|{mt}|{radius_km}"
 
 
-def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True):
+def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None):
     """
-    Generate one cartographic map. Tries to fetch real GEE imagery
-    (getThumbURL) and falls back to synthetic data if GEE is unavailable.
+    Genera el mapa de cuenca hidrográfica con fondo satelital y red de drenaje.
+    Es el primer mapa del catálogo temático.
+    """
+    key = _cache_key(lat, lon, "watershed", radius_km)
+    if key in _MAP_CACHE:
+        return _MAP_CACHE[key]
+
+    if watershed_data is None:
+        watershed_data = get_watershed_overlay(lat, lon, radius_km)
+
+    # Fondo: imagen satelital RGB (GEE) o DEM sintético como base
+    rgb_bg = watershed_data.get("rgb") if watershed_data else None
+
+    if rgb_bg is None:
+        # Fallback: DEM sintético como fondo topográfico
+        dem_arr = _synthetic_data("dem", lat=lat, lon=lon)
+        png = generate_cartographic_map(
+            lat, lon, "watershed", radius_km=radius_km,
+            data_array=dem_arr, watershed_data=watershed_data
+        )
+    else:
+        png = generate_cartographic_map(
+            lat, lon, "watershed", radius_km=radius_km,
+            rgb_image=rgb_bg, watershed_data=watershed_data
+        )
+
+    if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
+        _MAP_CACHE.pop(next(iter(_MAP_CACHE)))
+    _MAP_CACHE[key] = png
+    return png
+
+
+def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True,
+                          watershed_data=None):
+    """
+    Generate one cartographic map with watershed overlay.
+    Tries real GEE imagery first, falls back to synthetic data.
     Result is cached in memory.
     """
+    if map_type == "watershed":
+        return generate_watershed_map(lat, lon, radius_km, watershed_data=watershed_data)
+
     key = _cache_key(lat, lon, map_type, radius_km)
     if use_cache and key in _MAP_CACHE:
         return _MAP_CACHE[key]
@@ -835,7 +1009,8 @@ def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True):
         rgb = fetch_gee_thumbnail(map_type, lat, lon, radius_km=radius_km)
 
     png = generate_cartographic_map(lat, lon, map_type,
-                                    radius_km=radius_km, rgb_image=rgb)
+                                    radius_km=radius_km, rgb_image=rgb,
+                                    watershed_data=watershed_data)
 
     if use_cache:
         if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
@@ -845,12 +1020,17 @@ def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True):
 
 
 def generate_all_thematic_maps(lat, lon, radius_km=15.0):
-    """Return dict {map_type: base64_png} for all 8 thematic maps.
-
-    Uses real GEE imagery when authenticated, synthetic fallback otherwise.
     """
-    return {mt: generate_thematic_map(lat, lon, mt, radius_km=radius_km)
-            for mt in MAP_TITLES}
+    Retorna dict {map_type: base64_png} para todos los mapas temáticos.
+    El primero es el mapa de cuenca; los siguientes tienen el overlay de cuenca.
+    """
+    wd = get_watershed_overlay(lat, lon, radius_km)
+    maps = {"watershed": generate_watershed_map(lat, lon, radius_km, watershed_data=wd)}
+    for mt in list(MAP_TITLES.keys()):
+        if mt != "watershed":
+            maps[mt] = generate_thematic_map(lat, lon, mt,
+                                             radius_km=radius_km, watershed_data=wd)
+    return maps
 
 
 def generate_gee_code(lat, lon, d50, d90):
