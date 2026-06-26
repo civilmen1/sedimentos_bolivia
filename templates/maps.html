@@ -188,13 +188,18 @@ body {
      href="/report/pdf?lat={{ lat }}&lon={{ lon }}&d50={{ d50 }}&d90={{ d90 }}">
     📥 Descargar PDF
   </a>
-  <a class="btn btn-dl"
-     href="/gee_code?lat={{ lat }}&lon={{ lon }}&d50={{ d50 }}&d90={{ d90 }}">
-    🌍 Código GEE
-  </a>
   <button class="btn" style="background:#4b5563; color:#fff;" onclick="window.print()">
     🖨 Imprimir
   </button>
+  {% if maps_source == 'real' %}
+  <span style="margin-left:auto; font-size:.78rem; color:#34d399; font-weight:600;">
+    🛰 Datos satelitales reales — Google Earth Engine
+  </span>
+  {% else %}
+  <span style="margin-left:auto; font-size:.78rem; color:#fbbf24; font-weight:600;">
+    ⚠ Datos de demostración — configure la cuenta de servicio GEE para datos reales
+  </span>
+  {% endif %}
 </div>
 
 <!-- ═══ MAPS GRID ═══ -->
@@ -228,7 +233,11 @@ body {
 <!-- ═══ DOWNLOAD HINT ═══ -->
 <div class="dl-section">
   <div>
-    <p>💡 <strong>Nota:</strong> Los mapas muestran datos sintéticos representativos. Para mapas con datos satelitales reales, ejecuta el Código GEE en Google Colab y exporta los GeoTIFF a Google Drive.</p>
+    {% if maps_source == 'real' %}
+    <p>🛰 <strong>Datos reales:</strong> Los mapas se generaron directamente desde Google Earth Engine (Sentinel-2, SRTM, ESA WorldCover, JRC) y se renderizaron con marco cartográfico completo (grilla UTM WGS84 c/2500 m, norte, escala, leyenda).</p>
+    {% else %}
+    <p>⚠ <strong>Modo demostración:</strong> Los mapas muestran datos sintéticos. Para obtener imágenes satelitales reales, configure la clave JSON de la cuenta de servicio de Google Earth Engine como variable de entorno <code>EE_SERVICE_ACCOUNT_JSON</code> del servidor.</p>
+    {% endif %}
     <p class="dl-hint">Haz clic derecho sobre cualquier mapa → "Guardar imagen como" para descargar en PNG de alta resolución (130 dpi).</p>
   </div>
 </div>

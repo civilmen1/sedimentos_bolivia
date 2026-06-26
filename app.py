@@ -21,11 +21,16 @@ from models.sediment import (
 )
 from utils.gee_handler import (
     initialize_gee,
+    gee_ready,
+    fetch_gee_thumbnail,
+    LAYER_META,
     get_slope_from_dem,
     get_map_url,
     get_landcover_at_point,
     get_ndti_turbidity
 )
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.cm import ScalarMappable
 
 app = Flask(__name__)
 app.jinja_env.globals['enumerate'] = enumerate
@@ -618,7 +623,7 @@ def _add_scale_bar(ax, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5):
 
 
 def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
-                              data_array=None):
+                              data_array=None, rgb_image=None):
     """
     Generate a professional cartographic map PNG (base64) with:
     – UTM WGS84 grid at 2500 m
@@ -632,6 +637,8 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     map_type    : one of MAP_TITLES keys
     radius_km   : half-side of the map window (km)
     data_array  : optional numpy 2-D array; synthetic data used if None
+    rgb_image   : optional numpy RGB(A) array rendered by GEE; if provided it is
+                  drawn directly and the legend is built from the layer palette
     """
     plt.rcParams.update({
         'font.family': 'DejaVu Serif',
@@ -646,14 +653,22 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     lon_min, lon_max = lon - deg_lon, lon + deg_lon
     extent = [lon_min, lon_max, lat_min, lat_max]
 
-    # ── Data ─────────────────────────────────────────────────────────────
-    if data_array is None:
-        data_array = _synthetic_data(map_type, lat=lat, lon=lon)
+    is_real = rgb_image is not None
+    meta = LAYER_META.get(map_type, {})
 
-    cmap  = MAP_CMAPS.get(map_type, 'viridis')
-    title = MAP_TITLES.get(map_type, map_type.upper())
-    src   = MAP_SOURCES.get(map_type, "—")
-    lbl   = MAP_LEGEND_LABELS.get(map_type, "Valor")
+    # ── Data ─────────────────────────────────────────────────────────────
+    if is_real:
+        title = meta.get('title', MAP_TITLES.get(map_type, map_type.upper()))
+        src   = meta.get('source', MAP_SOURCES.get(map_type, "—"))
+        lbl   = meta.get('legend', MAP_LEGEND_LABELS.get(map_type, "Valor"))
+        cmap  = LinearSegmentedColormap.from_list('gee_' + map_type, meta['palette'])
+    else:
+        if data_array is None:
+            data_array = _synthetic_data(map_type, lat=lat, lon=lon)
+        cmap  = MAP_CMAPS.get(map_type, 'viridis')
+        title = MAP_TITLES.get(map_type, map_type.upper())
+        src   = MAP_SOURCES.get(map_type, "—") + "  (datos sintéticos de demostración)"
+        lbl   = MAP_LEGEND_LABELS.get(map_type, "Valor")
 
     # ── Figure layout ────────────────────────────────────────────────────
     # 14 × 10 in: map (left 74%), colorbar strip (2%), right pad (24%)
@@ -666,9 +681,14 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                             frameon=False)
 
     # ── Main map ─────────────────────────────────────────────────────────
-    im = ax_map.imshow(data_array, cmap=cmap,
-                       extent=[lon_min, lon_max, lat_min, lat_max],
-                       origin='upper', aspect='auto', zorder=1)
+    if is_real:
+        im = ax_map.imshow(rgb_image,
+                           extent=[lon_min, lon_max, lat_min, lat_max],
+                           origin='upper', aspect='auto', zorder=1)
+    else:
+        im = ax_map.imshow(data_array, cmap=cmap,
+                           extent=[lon_min, lon_max, lat_min, lat_max],
+                           origin='upper', aspect='auto', zorder=1)
 
     # Channel line (approximate, N-S through centre)
     ax_map.plot([lon, lon], [lat_min + deg_lat*0.05, lat_max - deg_lat*0.05],
@@ -704,7 +724,13 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         spine.set_linewidth(1.2)
 
     # ── Colorbar ─────────────────────────────────────────────────────────
-    cb = fig.colorbar(im, cax=ax_cb)
+    if is_real:
+        norm = Normalize(vmin=meta['vmin'], vmax=meta['vmax'])
+        sm = ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cb = fig.colorbar(sm, cax=ax_cb)
+    else:
+        cb = fig.colorbar(im, cax=ax_cb)
     cb.set_label(lbl, fontsize=8, labelpad=4)
     cb.ax.tick_params(labelsize=7)
 
@@ -785,9 +811,45 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     return 'data:image/png;base64,' + base64.b64encode(buf.read()).decode()
 
 
-def generate_all_thematic_maps(lat, lon):
-    """Return dict {map_type: base64_png} for all 8 thematic maps."""
-    return {mt: generate_cartographic_map(lat, lon, mt)
+# Caché en memoria de mapas renderizados, evita reconsultar GEE en cada vista.
+_MAP_CACHE = {}
+_MAP_CACHE_MAX = 64
+
+
+def _cache_key(lat, lon, mt, radius_km):
+    return f"{round(lat,5)}|{round(lon,5)}|{mt}|{radius_km}"
+
+
+def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True):
+    """
+    Generate one cartographic map. Tries to fetch real GEE imagery
+    (getThumbURL) and falls back to synthetic data if GEE is unavailable.
+    Result is cached in memory.
+    """
+    key = _cache_key(lat, lon, map_type, radius_km)
+    if use_cache and key in _MAP_CACHE:
+        return _MAP_CACHE[key]
+
+    rgb = None
+    if gee_ready():
+        rgb = fetch_gee_thumbnail(map_type, lat, lon, radius_km=radius_km)
+
+    png = generate_cartographic_map(lat, lon, map_type,
+                                    radius_km=radius_km, rgb_image=rgb)
+
+    if use_cache:
+        if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
+            _MAP_CACHE.pop(next(iter(_MAP_CACHE)))
+        _MAP_CACHE[key] = png
+    return png
+
+
+def generate_all_thematic_maps(lat, lon, radius_km=15.0):
+    """Return dict {map_type: base64_png} for all 8 thematic maps.
+
+    Uses real GEE imagery when authenticated, synthetic fallback otherwise.
+    """
+    return {mt: generate_thematic_map(lat, lon, mt, radius_km=radius_km)
             for mt in MAP_TITLES}
 
 
@@ -1539,6 +1601,15 @@ def report():
             },
         }
         results["charts"] = generate_charts(results)
+        try:
+            results["maps"] = generate_all_thematic_maps(lat, lon)
+            results["maps_source"] = "real" if gee_ready() else "synthetic"
+        except Exception as me:
+            print(f"Map generation failed: {me}")
+            results["maps"] = {}
+            results["maps_source"] = "none"
+        results["map_titles"] = MAP_TITLES
+        results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
         return render_template("report.html", results=results)
     except Exception as e:
         return str(e), 400
@@ -1619,6 +1690,15 @@ def report_pdf():
             },
         }
         results["charts"] = generate_charts(results)
+        try:
+            results["maps"] = generate_all_thematic_maps(lat, lon)
+            results["maps_source"] = "real" if gee_ready() else "synthetic"
+        except Exception as me:
+            print(f"Map generation failed: {me}")
+            results["maps"] = {}
+            results["maps_source"] = "none"
+        results["map_titles"] = MAP_TITLES
+        results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
 
         html_str = render_template("report_pdf.html", results=results)
         from weasyprint import HTML
@@ -1633,16 +1713,6 @@ def report_pdf():
         return str(e), 500
 
 
-@app.route("/gee_code")
-def gee_code():
-    lat = float(request.args.get("lat", -16.5))
-    lon = float(request.args.get("lon", -68.15))
-    d50 = float(request.args.get("d50", 0.45))
-    d90 = float(request.args.get("d90", 0.9))
-    code = generate_gee_code(lat, lon, d50, d90)
-    return render_template("gee_maps.html", lat=lat, lon=lon, d50=d50, d90=d90, gee_code=code)
-
-
 @app.route("/maps")
 def maps_view():
     try:
@@ -1651,14 +1721,16 @@ def maps_view():
         d50  = float(request.args.get("d50",  0.45))
         d90  = float(request.args.get("d90",  0.9))
         maps = generate_all_thematic_maps(lat, lon)
+        map_sources = {k: v.get("source", "—") for k, v in LAYER_META.items()}
         return render_template(
             "maps.html",
             lat=lat, lon=lon, d50=d50, d90=d90,
             maps=maps,
             map_titles=MAP_TITLES,
-            map_sources=MAP_SOURCES,
+            map_sources=map_sources,
             author=MAP_AUTHOR,
             date=datetime.now().strftime("%d/%m/%Y"),
+            maps_source=("real" if gee_ready() else "synthetic"),
         )
     except Exception as e:
         import traceback; traceback.print_exc()
