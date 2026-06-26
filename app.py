@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, send_file
+import os
 import numpy as np
 import math
 import io
@@ -635,6 +636,133 @@ def _add_scale_bar(ax, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5):
 _WATERSHED_CACHE = {}
 _WATERSHED_CACHE_MAX = 16
 
+# Tope del lado de la malla de geoproceso (balance memoria/resolución).
+# Configurable por variable de entorno DELINEATION_MAX_DIM.
+DELINEATION_MAX_DIM = int(os.environ.get("DELINEATION_MAX_DIM", "2048"))
+
+
+def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
+    """
+    Geoproceso hidrológico sobre un DEM real (Copernicus GLO-30 remuestreado).
+
+    Usa pysheds (relleno de depresiones → dirección de flujo D8 →
+    acumulación de flujo → cuenca de aporte → red de drenaje) para delimitar
+    la cuenca que drena al punto de muestreo y extraer el cauce principal.
+
+    Retorna dict (coordenadas en lon/lat WGS84):
+      'boundary'     : [[lon,lat], ...] anillo cerrado del parteaguas
+      'channel'      : [[lon,lat], ...] cauce principal
+      'tributaries'  : [ [[lon,lat], ...], ... ] afluentes
+      'is_real'      : True
+    o None si el geoproceso falla o la cuenca resulta degenerada.
+    """
+    try:
+        import numpy as _np
+        import pyproj
+        from affine import Affine
+        from pysheds.grid import Grid
+        from pysheds.view import Raster, ViewFinder
+        from skimage import measure
+
+        dem = _np.asarray(dem, dtype=_np.float64)
+        nod = -9999.0
+        dem_clean = _np.where(_np.isfinite(dem), dem, nod)
+        if not isinstance(transform, Affine):
+            transform = Affine(*transform[:6])
+
+        crs = pyproj.CRS.from_epsg(epsg)
+        vf = ViewFinder(affine=transform, shape=dem_clean.shape,
+                        nodata=_np.float64(nod), crs=crs)
+        dem_r = Raster(dem_clean, viewfinder=vf)
+
+        grid = Grid.from_raster(dem_r)
+        filled = grid.fill_depressions(dem_r)
+        inflated = grid.resolve_flats(filled)
+        fdir = grid.flowdir(inflated)
+        acc = grid.accumulation(fdir)
+        acc_arr = _np.asarray(acc)
+
+        acc_max = float(_np.nanmax(acc_arr))
+        if not _np.isfinite(acc_max) or acc_max < 50:
+            return None
+
+        # Punto de descarga: celda de alta acumulación más cercana al muestreo
+        to_utm = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+        x_pt, y_pt = to_utm.transform(lon, lat)
+        hi_mask = Raster((acc_arr > acc_max * 0.02).astype(_np.uint8),
+                         viewfinder=acc.viewfinder)
+        x_snap, y_snap = grid.snap_to_mask(hi_mask, (x_pt, y_pt))
+
+        catch = grid.catchment(x=x_snap, y=y_snap, fdir=fdir,
+                               xytype='coordinate')
+        catch_arr = _np.asarray(catch) > 0
+        if int(catch_arr.sum()) < 30:
+            return None
+
+        to_ll = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True)
+
+        def _cells_to_lonlat(contour_rc, step=2):
+            out = []
+            for r, c in contour_rc[::step]:
+                x, y = transform * (c, r)
+                lo, la = to_ll.transform(x, y)
+                out.append([float(lo), float(la)])
+            return out
+
+        # Parteaguas: contorno mayor de la máscara de cuenca
+        contours = measure.find_contours(catch_arr.astype(float), 0.5)
+        if not contours:
+            return None
+        biggest = max(contours, key=len)
+        biggest = measure.approximate_polygon(biggest, tolerance=0.7)
+        boundary = _cells_to_lonlat(biggest, step=1)
+        if len(boundary) < 4:
+            return None
+        if boundary[0] != boundary[-1]:
+            boundary.append(boundary[0])
+
+        # Red de drenaje dentro de la cuenca
+        channel, tributaries = [], []
+        try:
+            grid.clip_to(Raster(catch_arr.astype(_np.uint8),
+                                viewfinder=fdir.viewfinder))
+            acc_clip = grid.view(acc, nodata=0)
+            fdir_clip = grid.view(fdir, nodata=0)
+            acc_c = _np.asarray(acc_clip)
+            thr = max(float(_np.nanmax(acc_c)) * 0.02, 30.0)
+            net = grid.extract_river_network(
+                fdir_clip,
+                Raster((acc_c > thr).astype(_np.uint8),
+                       viewfinder=fdir_clip.viewfinder))
+            feats = net.get('features', [])
+
+            def _coords_to_lonlat(coords):
+                out = []
+                for x, y in coords:
+                    lo, la = to_ll.transform(x, y)
+                    out.append([float(lo), float(la)])
+                return out
+
+            lines = [_coords_to_lonlat(f['geometry']['coordinates'])
+                     for f in feats if f['geometry']['coordinates']]
+            lines = [ln for ln in lines if len(ln) >= 2]
+            if lines:
+                lines.sort(key=len, reverse=True)
+                channel = lines[0]
+                tributaries = lines[1:16]
+        except Exception as e:
+            print(f"river network extraction failed: {e}")
+
+        return {
+            "boundary": boundary,
+            "channel": channel,
+            "tributaries": tributaries,
+            "is_real": True,
+        }
+    except Exception as e:
+        print(f"delineate_watershed_from_dem failed: {e}")
+        return None
+
 
 def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
     """
@@ -821,8 +949,11 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
     data = None
     if gee_ready():
-        # Escala adaptativa: 12.5 m, acotando la malla a ≤1600 px de lado
-        scale_m = max(12.5, (2 * radius_km * 1000.0) / 1600.0)
+        # Balance memoria/resolución: objetivo 12.5 m, acotando la malla de
+        # geoproceso a ≤ DELINEATION_MAX_DIM px por lado. A 2048 px se obtiene
+        # 12.5 m para radios ≤ ~12.8 km y ~14.6 m para radio 15 km, con un pico
+        # de memoria ~1.2 GB y ~12 s por cuenca (cacheada).
+        scale_m = max(12.5, (2 * radius_km * 1000.0) / DELINEATION_MAX_DIM)
         dem_pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=scale_m)
         if dem_pack is not None:
             dem, transform, epsg, _extent = dem_pack
@@ -2083,6 +2214,33 @@ def maps_view():
     except Exception as e:
         import traceback; traceback.print_exc()
         return str(e), 500
+
+
+def _warmup_geoprocess():
+    """
+    Precompila las funciones numba de pysheds con un DEM diminuto, en un hilo
+    de fondo. Así el primer geoproceso real (cuenca) no paga ~70-80 s de
+    compilación JIT y responde en ~12 s. No bloquea el arranque del servidor.
+    """
+    try:
+        from affine import Affine
+        n = 96
+        cols, rows = np.meshgrid(np.arange(n), np.arange(n))
+        dem = (np.abs(cols - n / 2) * 1.4 + (n - rows) * 0.7 + 3000.0)
+        transform = Affine(20.0, 0, 500000.0, 0, -20.0, 8200000.0)
+        delineate_watershed_from_dem(dem, transform, 32719, -16.5, -68.15)
+        print("Geoprocess JIT warmup completado.")
+    except Exception as e:
+        print(f"Geoprocess JIT warmup omitido: {e}")
+
+
+# Lanza el warmup en segundo plano al importar el módulo (gunicorn importa
+# app:app), sin demorar el bind del puerto.
+try:
+    import threading
+    threading.Thread(target=_warmup_geoprocess, daemon=True).start()
+except Exception as _e:
+    print(f"No se pudo lanzar el warmup: {_e}")
 
 
 if __name__ == "__main__":
