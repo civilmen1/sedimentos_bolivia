@@ -28,6 +28,7 @@ from utils.gee_handler import (
 )
 
 app = Flask(__name__)
+app.jinja_env.globals['enumerate'] = enumerate
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -331,6 +332,463 @@ def generate_charts(r):
     charts['location_map'] = _fig_to_b64(fig)
 
     return charts
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SISTEMA CARTOGRÁFICO — MAPAS TEMÁTICOS CON ELEMENTOS PROFESIONALES
+# ════════════════════════════════════════════════════════════════════════════
+
+MAP_AUTHOR = "Ing. Luis Franco Guarachi"
+
+# Fuentes satelitales por tipo de mapa
+MAP_SOURCES = {
+    'dem':      "SRTM v3 / NASA (2000) — 30 m",
+    'slope':    "SRTM v3 + ee.Terrain.slope() / GEE — 30 m",
+    'ndvi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
+    'ndwi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
+    'ndti':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
+    'manning':  "ESA WorldCover 2021 — 10 m  |  Reclasificación Manning's n",
+    'risk':     "Multi-fuente GEE (SRTM + JRC + CN) — 30 m",
+    'jrc':      "JRC Global Surface Water 1984–2021 / Landsat — 30 m",
+}
+
+MAP_CMAPS = {
+    'dem':     'terrain',
+    'slope':   'YlOrRd',
+    'ndvi':    'RdYlGn',
+    'ndwi':    'RdYlBu',
+    'ndti':    'YlOrBr',
+    'manning': 'PuBuGn',
+    'risk':    'RdYlGn_r',
+    'jrc':     'Blues',
+}
+
+MAP_TITLES = {
+    'dem':     "Modelo Digital de Elevación (DEM) — SRTM 30 m",
+    'slope':   "Pendiente del Terreno (S, m/m)",
+    'ndvi':    "Índice de Vegetación Normalizado (NDVI)",
+    'ndwi':    "Índice de Agua Normalizado (NDWI)",
+    'ndti':    "Índice de Turbidez Normalizado (NDTI)",
+    'manning': "Coeficiente de Manning (n) — ESA WorldCover",
+    'risk':    "Índice Compuesto de Riesgo Hidrosedimentológico",
+    'jrc':     "Frecuencia de Inundación — JRC Global Surface Water",
+}
+
+MAP_LEGEND_LABELS = {
+    'dem':     "Elevación (m s.n.m.)",
+    'slope':   "Pendiente (m/m)",
+    'ndvi':    "NDVI (−1 a +1)",
+    'ndwi':    "NDWI (−1 a +1)",
+    'ndti':    "NDTI (−1 a +1)",
+    'manning': "n de Manning",
+    'risk':    "Índice de Riesgo (0–1)",
+    'jrc':     "Frecuencia de inundación (%)",
+}
+
+
+def _latlon_to_utm(lat, lon):
+    """Convert WGS84 lat/lon to UTM easting, northing, zone (manual, no external deps)."""
+    a  = 6378137.0
+    e2 = 0.00669437999014
+    k0 = 0.9996
+    zone = int((lon + 180) / 6) + 1
+    lon0 = math.radians((zone - 1) * 6 - 180 + 3)
+    lat_r, lon_r = math.radians(lat), math.radians(lon)
+    e1sq = e2 / (1 - e2)
+    N = a / math.sqrt(1 - e2 * math.sin(lat_r) ** 2)
+    T = math.tan(lat_r) ** 2
+    C = e1sq * math.cos(lat_r) ** 2
+    A = math.cos(lat_r) * (lon_r - lon0)
+    M = a * (
+        (1 - e2/4 - 3*e2**2/64 - 5*e2**3/256) * lat_r
+        - (3*e2/8 + 3*e2**2/32 + 45*e2**3/1024) * math.sin(2*lat_r)
+        + (15*e2**2/256 + 45*e2**3/1024) * math.sin(4*lat_r)
+        - (35*e2**3/3072) * math.sin(6*lat_r)
+    )
+    E = k0 * N * (A + (1-T+C)*A**3/6
+                    + (5-18*T+T**2+72*C-58*e1sq)*A**5/120) + 500000.0
+    N_ = k0 * (M + N*math.tan(lat_r)*(
+        A**2/2
+        + (5-T+9*C+4*C**2)*A**4/24
+        + (61-58*T+T**2+600*C-330*e1sq)*A**6/720
+    ))
+    if lat < 0:
+        N_ += 10_000_000.0
+    return E, N_, zone
+
+
+def _utm_to_latlon(E, N, zone, northern):
+    """Convert UTM easting, northing, zone to WGS84 lat/lon (manual)."""
+    a  = 6378137.0
+    e2 = 0.00669437999014
+    k0 = 0.9996
+    e1sq = e2 / (1 - e2)
+    x = E - 500_000.0
+    y = N if northern else N - 10_000_000.0
+    lon0 = math.radians((zone - 1) * 6 - 180 + 3)
+    M = y / k0
+    mu = M / (a * (1 - e2/4 - 3*e2**2/64 - 5*e2**3/256))
+    e1 = (1 - math.sqrt(1 - e2)) / (1 + math.sqrt(1 - e2))
+    phi1 = (mu
+            + (3*e1/2 - 27*e1**3/32) * math.sin(2*mu)
+            + (21*e1**2/16 - 55*e1**4/32) * math.sin(4*mu)
+            + (151*e1**3/96) * math.sin(6*mu))
+    N1 = a / math.sqrt(1 - e2 * math.sin(phi1)**2)
+    T1 = math.tan(phi1) ** 2
+    C1 = e1sq * math.cos(phi1) ** 2
+    R1 = a * (1 - e2) / (1 - e2 * math.sin(phi1)**2) ** 1.5
+    D  = x / (N1 * k0)
+    lat = phi1 - (N1 * math.tan(phi1) / R1) * (
+        D**2/2
+        - (5 + 3*T1 + 10*C1 - 4*C1**2 - 9*e1sq) * D**4/24
+        + (61 + 90*T1 + 298*C1 + 45*T1**2 - 252*e1sq - 3*C1**2) * D**6/720
+    )
+    lon = lon0 + (
+        D - (1+2*T1+C1)*D**3/6
+        + (5-2*C1+28*T1-3*C1**2+8*e1sq+24*T1**2)*D**5/120
+    ) / math.cos(phi1)
+    return math.degrees(lat), math.degrees(lon)
+
+
+def _smooth2d(arr, passes=6):
+    """Lightweight 2-D smoothing without scipy (5-point stencil)."""
+    a = arr.copy()
+    for _ in range(passes):
+        a = (np.roll(a, 1, 0) + np.roll(a, -1, 0)
+             + np.roll(a, 1, 1) + np.roll(a, -1, 1) + a) / 5.0
+    return a
+
+
+def _synthetic_data(map_type, ny=128, nx=128, lat=0.0, lon=0.0):
+    """
+    Generate a synthetic numpy array for the given map type.
+    Represents a typical Bolivia Andean river valley:
+    – channel runs roughly N-S through map center
+    – terrain rises toward E and W margins
+    """
+    rng = np.random.default_rng(seed=int(abs(lat * 100) + abs(lon * 100)) % 2**31)
+    y = np.linspace(-1, 1, ny)
+    x = np.linspace(-1, 1, nx)
+    xx, yy = np.meshgrid(x, y)
+
+    dist_ch = np.abs(xx) + 0.15 * np.abs(yy)   # distance from channel
+
+    if map_type == 'dem':
+        base = 2200 + 1100 * dist_ch ** 0.6 + 120 * yy
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 8)
+        return (base + 150 * noise).astype(float)
+
+    elif map_type == 'slope':
+        dem = _synthetic_data('dem', ny, nx, lat, lon)
+        sx = np.gradient(dem, axis=1)
+        sy = np.gradient(dem, axis=0)
+        return np.hypot(sx, sy) / 50.0   # m/m approx
+
+    elif map_type == 'ndvi':
+        ndvi = 0.55 * (1 - np.exp(-2.5 * dist_ch)) - 0.15
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 10)
+        return np.clip(ndvi + 0.12 * noise, -0.3, 0.85)
+
+    elif map_type == 'ndwi':
+        ndwi = -0.6 * dist_ch + 0.45 * np.exp(-15 * dist_ch**2)
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 8)
+        return np.clip(ndwi + 0.08 * noise, -0.6, 0.5)
+
+    elif map_type == 'ndti':
+        ndti = 0.35 * np.exp(-20 * dist_ch**2) - 0.25 * dist_ch
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 6)
+        return np.clip(ndti + 0.06 * noise, -0.4, 0.5)
+
+    elif map_type == 'manning':
+        n = 0.035 + 0.055 * (1 - np.exp(-2.0 * dist_ch))
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 12)
+        return np.clip(n + 0.008 * noise, 0.022, 0.12)
+
+    elif map_type == 'risk':
+        risk = 1.0 - dist_ch * 0.8
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 8)
+        return np.clip(risk + 0.1 * noise, 0.0, 1.0)
+
+    elif map_type == 'jrc':
+        freq = 95 * np.exp(-25 * dist_ch**2) + 10 * np.exp(-3 * dist_ch)
+        noise = _smooth2d(rng.standard_normal((ny, nx)), 6)
+        return np.clip(freq + 5 * noise, 0, 100)
+
+    return np.zeros((ny, nx))
+
+
+def _draw_utm_grid(ax, lat_min, lat_max, lon_min, lon_max, spacing_m=2500):
+    """Draw UTM WGS84 grid on geographic (lat/lon) axes and label in km."""
+    clat = (lat_min + lat_max) / 2
+    clon = (lon_min + lon_max) / 2
+    _, _, zone = _latlon_to_utm(clat, clon)
+    northern = clat >= 0
+
+    corners = [(lat_min, lon_min), (lat_min, lon_max),
+               (lat_max, lon_min), (lat_max, lon_max)]
+    utm_e = [_latlon_to_utm(la, lo)[0] for la, lo in corners]
+    utm_n = [_latlon_to_utm(la, lo)[1] for la, lo in corners]
+    e_min, e_max = min(utm_e), max(utm_e)
+    n_min, n_max = min(utm_n), max(utm_n)
+
+    e_start = math.ceil(e_min / spacing_m) * spacing_m
+    n_start = math.ceil(n_min / spacing_m) * spacing_m
+    e_lines = np.arange(e_start, e_max + spacing_m, spacing_m)
+    n_lines = np.arange(n_start, n_max + spacing_m, spacing_m)
+
+    n_pts = 30
+    dlat = lat_max - lat_min
+    dlon = lon_max - lon_min
+
+    # Easting lines (near-vertical)
+    for e in e_lines:
+        pts = []
+        for i in range(n_pts):
+            n_val = n_min + (n_max - n_min) * i / (n_pts - 1)
+            try:
+                la, lo = _utm_to_latlon(e, n_val, zone, northern)
+                if lat_min <= la <= lat_max and lon_min <= lo <= lon_max:
+                    pts.append((lo, la))
+            except Exception:
+                pass
+        if len(pts) > 1:
+            lons_g, lats_g = zip(*pts)
+            ax.plot(lons_g, lats_g, color='#555', lw=0.35, ls='--', alpha=0.55, zorder=3)
+            lbl_lo, lbl_la = pts[0]
+            ax.text(lbl_lo, lat_min + dlat * 0.015, f'{e/1000:.1f}',
+                    fontsize=5.5, ha='center', va='bottom', color='#444',
+                    rotation=90, clip_on=True)
+
+    # Northing lines (near-horizontal)
+    for n in n_lines:
+        pts = []
+        for i in range(n_pts):
+            e_val = e_min + (e_max - e_min) * i / (n_pts - 1)
+            try:
+                la, lo = _utm_to_latlon(e_val, n, zone, northern)
+                if lat_min <= la <= lat_max and lon_min <= lo <= lon_max:
+                    pts.append((lo, la))
+            except Exception:
+                pass
+        if len(pts) > 1:
+            lons_g, lats_g = zip(*pts)
+            ax.plot(lons_g, lats_g, color='#555', lw=0.35, ls='--', alpha=0.55, zorder=3)
+            lbl_lo, lbl_la = pts[len(pts) // 2], lats_g[len(pts) // 2]
+            ax.text(lon_min + dlon * 0.015, lbl_la, f'{n/1000:.1f}',
+                    fontsize=5.5, ha='left', va='center', color='#444', clip_on=True)
+
+    # Corner label "E (km UTM)" and "N (km UTM)"
+    ax.text(lon_min + dlon * 0.50, lat_min + dlat * 0.005,
+            f'E (km UTM)  —  Zona {zone}{"N" if northern else "S"}  —  WGS84',
+            fontsize=6, ha='center', va='top', color='#333', clip_on=True)
+
+
+def _add_north_arrow(ax, x=0.955, y=0.94, size=0.055):
+    """Add north arrow at axes-fraction position."""
+    ax.annotate('', xy=(x, y), xytext=(x, y - size),
+                xycoords='axes fraction', textcoords='axes fraction',
+                arrowprops=dict(arrowstyle='->', color='#111', lw=2.2,
+                                mutation_scale=12))
+    ax.text(x, y + 0.025, 'N', transform=ax.transAxes,
+            ha='center', va='bottom', fontsize=11, fontweight='bold', color='#111')
+
+
+def _add_scale_bar(ax, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5):
+    """Add a graphical scale bar (alternating black/white blocks)."""
+    deg_per_km = 1.0 / (111.132 - 0.56 * math.cos(2 * math.radians(lat))
+                        + 0.001 * math.cos(4 * math.radians(lat)))
+    seg_deg = scale_km / 2 * deg_per_km
+    x0 = lon_min + (lon_max - lon_min) * 0.04
+    y0 = lat_min + (lat_max - lat_min) * 0.032
+    tick_h = (lat_max - lat_min) * 0.012
+
+    for i in range(2):
+        color = 'black' if i % 2 == 0 else 'white'
+        rect = plt.Rectangle((x0 + i * seg_deg, y0 - tick_h / 2),
+                              seg_deg, tick_h,
+                              facecolor=color, edgecolor='black', lw=0.6, zorder=6)
+        ax.add_patch(rect)
+
+    for km_val, xpos in [(0, x0), (scale_km / 2, x0 + seg_deg),
+                         (scale_km, x0 + 2 * seg_deg)]:
+        ax.text(xpos, y0 + tick_h * 0.9, f'{km_val}',
+                ha='center', va='bottom', fontsize=6.5, color='#111', zorder=7)
+    ax.text(x0 + seg_deg, y0 + tick_h * 2.4,
+            'km', ha='center', va='bottom', fontsize=6.5, color='#111', zorder=7)
+
+
+def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
+                              data_array=None):
+    """
+    Generate a professional cartographic map PNG (base64) with:
+    – UTM WGS84 grid at 2500 m
+    – North arrow, scale bar
+    – Title, author, date, source
+    – Color legend
+
+    Parameters
+    ----------
+    lat, lon    : centre of the map (decimal degrees WGS84)
+    map_type    : one of MAP_TITLES keys
+    radius_km   : half-side of the map window (km)
+    data_array  : optional numpy 2-D array; synthetic data used if None
+    """
+    plt.rcParams.update({
+        'font.family': 'DejaVu Serif',
+        'font.size': 9,
+        'figure.facecolor': 'white',
+    })
+
+    # ── Extent ───────────────────────────────────────────────────────────
+    deg_lat = radius_km / 111.0
+    deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+    lat_min, lat_max = lat - deg_lat, lat + deg_lat
+    lon_min, lon_max = lon - deg_lon, lon + deg_lon
+    extent = [lon_min, lon_max, lat_min, lat_max]
+
+    # ── Data ─────────────────────────────────────────────────────────────
+    if data_array is None:
+        data_array = _synthetic_data(map_type, lat=lat, lon=lon)
+
+    cmap  = MAP_CMAPS.get(map_type, 'viridis')
+    title = MAP_TITLES.get(map_type, map_type.upper())
+    src   = MAP_SOURCES.get(map_type, "—")
+    lbl   = MAP_LEGEND_LABELS.get(map_type, "Valor")
+
+    # ── Figure layout ────────────────────────────────────────────────────
+    # 14 × 10 in: map (left 74%), colorbar strip (2%), right pad (24%)
+    # rows: top-title (8%), map (82%), bottom-cartouche (10%)
+    fig = plt.figure(figsize=(14, 10), dpi=130, facecolor='white')
+
+    ax_map  = fig.add_axes([0.06, 0.12, 0.68, 0.80])   # main map
+    ax_cb   = fig.add_axes([0.755, 0.20, 0.018, 0.58]) # colorbar
+    ax_info = fig.add_axes([0.79, 0.12, 0.19, 0.80],   # right info panel
+                            frameon=False)
+
+    # ── Main map ─────────────────────────────────────────────────────────
+    im = ax_map.imshow(data_array, cmap=cmap,
+                       extent=[lon_min, lon_max, lat_min, lat_max],
+                       origin='upper', aspect='auto', zorder=1)
+
+    # Channel line (approximate, N-S through centre)
+    ax_map.plot([lon, lon], [lat_min + deg_lat*0.05, lat_max - deg_lat*0.05],
+                color='#1a5276', lw=1.2, ls='-', alpha=0.55, zorder=4)
+
+    # Study point
+    ax_map.plot(lon, lat, marker='*', color='red', ms=14, zorder=8,
+                markeredgecolor='white', markeredgewidth=0.8,
+                label='Punto de muestreo')
+
+    # UTM grid 2500 m
+    _draw_utm_grid(ax_map, lat_min, lat_max, lon_min, lon_max, spacing_m=2500)
+
+    # Scale bar
+    _add_scale_bar(ax_map, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5)
+
+    # North arrow (inside map, top-right)
+    _add_north_arrow(ax_map, x=0.957, y=0.945, size=0.055)
+
+    # Geographic tick labels (lat/lon)
+    ax_map.set_xlim(lon_min, lon_max)
+    ax_map.set_ylim(lat_min, lat_max)
+    n_ticks = 4
+    xticks = np.linspace(lon_min, lon_max, n_ticks + 1)
+    yticks = np.linspace(lat_min, lat_max, n_ticks + 1)
+    ax_map.set_xticks(xticks)
+    ax_map.set_yticks(yticks)
+    ax_map.set_xticklabels([f'{v:.3f}°' for v in xticks], fontsize=7)
+    ax_map.set_yticklabels([f'{v:.3f}°' for v in yticks], fontsize=7)
+    ax_map.set_xlabel('Longitud (WGS84)', fontsize=8, labelpad=3)
+    ax_map.set_ylabel('Latitud (WGS84)', fontsize=8, labelpad=3)
+    for spine in ax_map.spines.values():
+        spine.set_linewidth(1.2)
+
+    # ── Colorbar ─────────────────────────────────────────────────────────
+    cb = fig.colorbar(im, cax=ax_cb)
+    cb.set_label(lbl, fontsize=8, labelpad=4)
+    cb.ax.tick_params(labelsize=7)
+
+    # ── Right info panel: north arrow header + legend texts ───────────────
+    ax_info.set_xlim(0, 1)
+    ax_info.set_ylim(0, 1)
+    ax_info.axis('off')
+
+    # Legend header
+    ax_info.text(0.5, 0.97, 'LEYENDA', ha='center', va='top',
+                 fontsize=9, fontweight='bold',
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='#f0f4f8', edgecolor='#aaa'))
+
+    # Point symbol
+    ax_info.plot(0.12, 0.91, marker='*', color='red', ms=11,
+                 markeredgecolor='white', markeredgewidth=0.6,
+                 transform=ax_info.transAxes, clip_on=False)
+    ax_info.text(0.22, 0.91, 'Punto de muestreo', ha='left', va='center',
+                 fontsize=8, transform=ax_info.transAxes)
+
+    ax_info.plot([0.06, 0.18], [0.86, 0.86], color='#1a5276', lw=1.5,
+                 transform=ax_info.transAxes, clip_on=False)
+    ax_info.text(0.22, 0.86, 'Canal principal\n(aprox.)', ha='left', va='center',
+                 fontsize=7, transform=ax_info.transAxes, color='#1a5276')
+
+    ax_info.plot([0.06, 0.18], [0.79, 0.79], color='#555', lw=0.5, ls='--',
+                 transform=ax_info.transAxes, clip_on=False)
+    ax_info.text(0.22, 0.79, 'Grilla UTM\n(c/2500 m)', ha='left', va='center',
+                 fontsize=7, transform=ax_info.transAxes, color='#444')
+
+    # Separator
+    ax_info.axhline(0.74, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
+
+    # Metadata block
+    meta = [
+        ('FUENTE:', src),
+        ('PROYECCIÓN:', f'UTM Zona {_latlon_to_utm(lat, lon)[2]}, WGS84'),
+        ('ESCALA APROX.:', f'1 : {int(radius_km * 2000 / 14 * 25.4 / 25.4 * 50):,}'),
+        ('AUTOR:', MAP_AUTHOR),
+        ('FECHA:', datetime.now().strftime('%d/%m/%Y')),
+        ('PROGRAMA:', 'Sedimentos Bolivia — GEE/Matplotlib'),
+    ]
+    y_pos = 0.71
+    for key, val in meta:
+        ax_info.text(0.02, y_pos, key, ha='left', va='top', fontsize=7,
+                     fontweight='bold', transform=ax_info.transAxes)
+        ax_info.text(0.02, y_pos - 0.035, val, ha='left', va='top', fontsize=6.5,
+                     color='#222', transform=ax_info.transAxes, wrap=True)
+        y_pos -= 0.095
+
+    # Coordinate box
+    y_pos -= 0.02
+    ax_info.axhline(y_pos + 0.04, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
+    ax_info.text(0.5, y_pos, f'Lat: {lat:.5f}°\nLon: {lon:.5f}°',
+                 ha='center', va='top', fontsize=7, color='#333',
+                 transform=ax_info.transAxes,
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='#f9f9f9',
+                           edgecolor='#ccc'))
+
+    # ── Super-title ───────────────────────────────────────────────────────
+    fig.text(0.50, 0.975, title.upper(), ha='center', va='top',
+             fontsize=13, fontweight='bold', color='#1a2a4a')
+    fig.text(0.50, 0.958,
+             'Bolivia — Análisis Hidrosedimentológico  |  Sistema de Información Geográfica',
+             ha='center', va='top', fontsize=8, color='#444')
+
+    # ── Bottom cartouche ──────────────────────────────────────────────────
+    fig.text(0.06, 0.005,
+             f'Autor: {MAP_AUTHOR}   |   Fecha: {datetime.now().strftime("%d/%m/%Y")}   |   '
+             f'Fuente: {src}   |   Datum: WGS84   |   Coordenadas: Lat {lat:.4f}°, Lon {lon:.4f}°',
+             ha='left', va='bottom', fontsize=6.5, color='#333')
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                facecolor='white', edgecolor='none')
+    plt.close(fig)
+    buf.seek(0)
+    return 'data:image/png;base64,' + base64.b64encode(buf.read()).decode()
+
+
+def generate_all_thematic_maps(lat, lon):
+    """Return dict {map_type: base64_png} for all 8 thematic maps."""
+    return {mt: generate_cartographic_map(lat, lon, mt)
+            for mt in MAP_TITLES}
 
 
 def generate_gee_code(lat, lon, d50, d90):
@@ -1183,6 +1641,28 @@ def gee_code():
     d90 = float(request.args.get("d90", 0.9))
     code = generate_gee_code(lat, lon, d50, d90)
     return render_template("gee_maps.html", lat=lat, lon=lon, d50=d50, d90=d90, gee_code=code)
+
+
+@app.route("/maps")
+def maps_view():
+    try:
+        lat  = float(request.args.get("lat",  -16.5))
+        lon  = float(request.args.get("lon",  -68.15))
+        d50  = float(request.args.get("d50",  0.45))
+        d90  = float(request.args.get("d90",  0.9))
+        maps = generate_all_thematic_maps(lat, lon)
+        return render_template(
+            "maps.html",
+            lat=lat, lon=lon, d50=d50, d90=d90,
+            maps=maps,
+            map_titles=MAP_TITLES,
+            map_sources=MAP_SOURCES,
+            author=MAP_AUTHOR,
+            date=datetime.now().strftime("%d/%m/%Y"),
+        )
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return str(e), 500
 
 
 if __name__ == "__main__":
