@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mapas Temáticos — Sedimentos Bolivia</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "Liberation Sans", Arial, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+  min-height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────────── */
+.site-header {
+  background: linear-gradient(135deg, #1e3a5f 0%, #0f2942 100%);
+  border-bottom: 3px solid #2563eb;
+  padding: 18px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.site-header h1 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f0f9ff;
+  letter-spacing: .02em;
+}
+.header-meta { font-size: .8rem; color: #94a3b8; line-height: 1.6; }
+.header-meta strong { color: #60a5fa; }
+
+/* ── Action bar ─────────────────────────────────────── */
+.action-bar {
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  padding: 10px 32px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.btn {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: .82rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: opacity .2s, transform .15s;
+}
+.btn:hover { opacity: .87; transform: translateY(-1px); }
+.btn-back   { background: #334155; color: #e2e8f0; }
+.btn-report { background: #1e3a8a; color: #fff; }
+.btn-dl     { background: #15803d; color: #fff; }
+.btn-pdf    { background: #7c2d12; color: #fff; }
+
+/* ── Grid ───────────────────────────────────────────── */
+.maps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(660px, 1fr));
+  gap: 24px;
+  padding: 24px 32px 48px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* ── Map card ───────────────────────────────────────── */
+.map-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.map-card-header {
+  background: linear-gradient(90deg, #1e3a5f 0%, #1a2a4a 100%);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.map-num {
+  background: #2563eb;
+  color: #fff;
+  font-size: .72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  min-width: 28px;
+  text-align: center;
+}
+.map-card-title {
+  font-size: .88rem;
+  font-weight: 600;
+  color: #bfdbfe;
+  flex: 1;
+}
+.map-source {
+  font-size: .68rem;
+  color: #64748b;
+  padding: 4px 16px 8px;
+  background: #172032;
+  border-bottom: 1px solid #253347;
+}
+.map-source strong { color: #60a5fa; }
+.map-img-wrap {
+  padding: 0;
+  background: #0f172a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.map-img-wrap img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.map-card-footer {
+  padding: 8px 14px;
+  background: #172032;
+  font-size: .7rem;
+  color: #475569;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* ── Download all section ───────────────────────────── */
+.dl-section {
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  padding: 16px 32px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.dl-section p { font-size: .82rem; color: #94a3b8; }
+.dl-hint { font-size: .75rem; color: #475569; margin-top: 4px; }
+
+/* ── Print ──────────────────────────────────────────── */
+@media print {
+  body { background: white; color: black; }
+  .action-bar, .dl-section { display: none; }
+  .maps-grid { gap: 12px; padding: 8px; }
+  .map-card { border: 1px solid #aaa; page-break-inside: avoid; }
+  .site-header { background: white; color: black; border-bottom: 2px solid #333; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="site-header">
+  <div>
+    <h1>🗺️ Mapas Temáticos — Análisis Hidrosedimentológico</h1>
+    <div class="header-meta">
+      Punto: <strong>Lat {{ lat }}°, Lon {{ lon }}°</strong>
+      &ensp;|&ensp; d₅₀ = <strong>{{ d50 }} mm</strong>
+      &ensp;|&ensp; d₉₀ = <strong>{{ d90 }} mm</strong>
+      &ensp;|&ensp; Grilla UTM WGS84 c/2500 m
+      &ensp;|&ensp; Autor: <strong>{{ author }}</strong>
+      &ensp;|&ensp; {{ date }}
+    </div>
+  </div>
+</header>
+
+<!-- ═══ ACTION BAR ═══ -->
+<div class="action-bar">
+  <a class="btn btn-back"
+     href="/report?lat={{ lat }}&lon={{ lon }}&d50={{ d50 }}&d90={{ d90 }}">
+    ← Informe Técnico
+  </a>
+  <a class="btn btn-report"
+     href="/report?lat={{ lat }}&lon={{ lon }}&d50={{ d50 }}&d90={{ d90 }}">
+    📄 Ver Informe
+  </a>
+  <a class="btn btn-pdf"
+     href="/report/pdf?lat={{ lat }}&lon={{ lon }}&d50={{ d50 }}&d90={{ d90 }}">
+    📥 Descargar PDF
+  </a>
+  <a class="btn btn-dl"
+     href="/gee_code?lat={{ lat }}&lon={{ lon }}&d50={{ d50 }}&d90={{ d90 }}">
+    🌍 Código GEE
+  </a>
+  <button class="btn" style="background:#4b5563; color:#fff;" onclick="window.print()">
+    🖨 Imprimir
+  </button>
+</div>
+
+<!-- ═══ MAPS GRID ═══ -->
+<div class="maps-grid">
+  {% set map_order = ['dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}
+  {% for idx, mt in enumerate(map_order) %}
+  {% if maps[mt] %}
+  <div class="map-card">
+    <div class="map-card-header">
+      <span class="map-num">{{ loop.index }}</span>
+      <span class="map-card-title">{{ map_titles[mt] }}</span>
+    </div>
+    <div class="map-source">
+      <strong>Fuente:</strong> {{ map_sources[mt] }}
+    </div>
+    <div class="map-img-wrap">
+      <img src="{{ maps[mt] }}"
+           alt="{{ map_titles[mt] }}"
+           loading="lazy">
+    </div>
+    <div class="map-card-footer">
+      <span>Grilla UTM WGS84 — c/2500 m</span>
+      <span>Autor: {{ author }}</span>
+      <span>{{ date }}</span>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<!-- ═══ DOWNLOAD HINT ═══ -->
+<div class="dl-section">
+  <div>
+    <p>💡 <strong>Nota:</strong> Los mapas muestran datos sintéticos representativos. Para mapas con datos satelitales reales, ejecuta el Código GEE en Google Colab y exporta los GeoTIFF a Google Drive.</p>
+    <p class="dl-hint">Haz clic derecho sobre cualquier mapa → "Guardar imagen como" para descargar en PNG de alta resolución (130 dpi).</p>
+  </div>
+</div>
+
+</body>
+</html>
