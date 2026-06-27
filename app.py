@@ -1240,8 +1240,12 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                 markeredgecolor='white', markeredgewidth=0.8,
                 label='Punto de muestreo')
 
-    # Scale bar
-    _add_scale_bar(ax_map, lat, lon_min, lon_max, lat_min, lat_max, scale_km=5)
+    # Scale bar — longitud "redonda" ≈ ¼ del ancho del mapa
+    width_km = 2.0 * radius_km
+    _target = width_km / 4.0
+    _nice = [1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200]
+    scale_km = min(_nice, key=lambda v: abs(v - _target))
+    _add_scale_bar(ax_map, lat, lon_min, lon_max, lat_min, lat_max, scale_km=scale_km)
 
     # North arrow (inside map, top-right)
     _add_north_arrow(ax_map, x=0.957, y=0.945, size=0.055)
@@ -1453,13 +1457,19 @@ def generate_all_thematic_maps(lat, lon, radius_km=15.0):
     """
     Retorna dict {map_type: base64_png} para todos los mapas temáticos.
     El primero es el mapa de cuenca; los siguientes tienen el overlay de cuenca.
+
+    La cuenca puede haberse delimitado en una ventana mayor que `radius_km`
+    (expansión adaptativa). Todos los mapas y el fondo satelital se dibujan con
+    ESE radio real (`analysis_radius_km`) para que la cuenca completa entre en
+    el recuadro (evita el parteaguas como "línea" cruzando el mapa).
     """
     wd = get_watershed_overlay(lat, lon, radius_km)
-    maps = {"watershed": generate_watershed_map(lat, lon, radius_km, watershed_data=wd)}
+    R = float(wd.get("analysis_radius_km", radius_km)) if wd else radius_km
+    maps = {"watershed": generate_watershed_map(lat, lon, R, watershed_data=wd)}
     for mt in list(MAP_TITLES.keys()):
         if mt != "watershed":
             maps[mt] = generate_thematic_map(lat, lon, mt,
-                                             radius_km=radius_km, watershed_data=wd)
+                                             radius_km=R, watershed_data=wd)
     return maps
 
 
