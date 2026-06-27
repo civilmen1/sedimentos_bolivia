@@ -709,17 +709,47 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
         if not _np.isfinite(acc_max) or acc_max < 50:
             return None
 
-        # Punto de descarga: celda de alta acumulación más cercana al muestreo
+        # Punto de descarga (break-point): se engancha a la celda de MÁXIMA
+        # acumulación dentro de un radio de búsqueda alrededor del punto de
+        # entrada, es decir, al CAUCE PRINCIPAL cercano. Así la cuenca delimitada
+        # es la real aguas arriba del puente/obra y no una microcuenca de ladera.
         to_utm = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
         x_pt, y_pt = to_utm.transform(lon, lat)
-        hi_mask = Raster((acc_arr > acc_max * 0.02).astype(_np.uint8),
-                         viewfinder=acc.viewfinder)
-        x_snap, y_snap = grid.snap_to_mask(hi_mask, (x_pt, y_pt))
+        res_x = abs(transform.a)
+        res_y = abs(transform.e)
+        inv = ~transform
+        col_pt, row_pt = inv * (x_pt, y_pt)
+        col_pt, row_pt = int(round(col_pt)), int(round(row_pt))
+        H, W = acc_arr.shape
 
-        catch = grid.catchment(x=x_snap, y=y_snap, fdir=fdir,
-                               xytype='coordinate')
-        catch_arr = _np.asarray(catch) > 0
-        if int(catch_arr.sum()) < 30:
+        def _catchment_from_snap(snap_radius_m):
+            rad = max(3, int(snap_radius_m / ((res_x + res_y) / 2.0)))
+            r0, r1 = max(0, row_pt - rad), min(H, row_pt + rad + 1)
+            c0, c1 = max(0, col_pt - rad), min(W, col_pt + rad + 1)
+            win = acc_arr[r0:r1, c0:c1]
+            if win.size == 0 or not _np.isfinite(_np.nanmax(win)):
+                return None, None, None
+            loc = _np.unravel_index(_np.nanargmax(win), win.shape)
+            sr, sc = r0 + int(loc[0]), c0 + int(loc[1])
+            xs, ys = transform * (sc + 0.5, sr + 0.5)
+            ca = _np.asarray(grid.catchment(x=xs, y=ys, fdir=fdir,
+                                            xytype='coordinate')) > 0
+            return ca, xs, ys
+
+        # Prueba varios radios de búsqueda y se queda con el que produce la
+        # cuenca MÁS GRANDE (engancha al cauce principal, no a una microcuenca
+        # de ladera). Los radios cubren desde el cauce justo bajo el punto hasta
+        # meandros desplazados ~varios km.
+        catch_arr, x_snap, y_snap, best = None, x_pt, y_pt, -1
+        for snap_r in (800.0, 1500.0, 2500.0, 3500.0, 5000.0):
+            ca, xs, ys = _catchment_from_snap(snap_r)
+            if ca is None:
+                continue
+            n_ca = int(ca.sum())
+            if n_ca > best:
+                best, catch_arr, x_snap, y_snap = n_ca, ca, xs, ys
+
+        if catch_arr is None or int(catch_arr.sum()) < 30:
             return None
 
         to_ll = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True)
