@@ -982,13 +982,24 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
     if gee_ready():
         # Balance memoria/resolución: objetivo 12.5 m, acotando la malla de
         # geoproceso a ≤ DELINEATION_MAX_DIM px por lado. A 2048 px se obtiene
-        # 12.5 m para radios ≤ ~12.8 km y ~14.6 m para radio 15 km, con un pico
-        # de memoria ~1.2 GB y ~12 s por cuenca (cacheada).
-        scale_m = max(12.5, (2 * radius_km * 1000.0) / DELINEATION_MAX_DIM)
-        dem_pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=scale_m)
-        if dem_pack is not None:
+        # 12.5 m para radios ≤ ~12.8 km y ~14.6 m para radio 15 km.
+        # Si la descarga del DEM falla a esa resolución (tamaño/timeout), se
+        # reintenta con escalas progresivamente más gruesas antes de caer al
+        # fallback esquemático: así la cuenca sigue siendo REAL.
+        base_scale = max(12.5, (2 * radius_km * 1000.0) / DELINEATION_MAX_DIM)
+        candidate_scales = []
+        for sc in (base_scale, 30.0, 60.0, 90.0):
+            if sc not in candidate_scales:
+                candidate_scales.append(sc)
+        for sc in candidate_scales:
+            dem_pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=sc)
+            if dem_pack is None:
+                continue
             dem, transform, epsg, _extent = dem_pack
             data = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
+            if data is not None:
+                data["dem_scale_m"] = round(sc, 1)
+                break
 
     if data is None:
         data = _synthetic_watershed(lat, lon, radius_km)
