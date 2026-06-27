@@ -1,5 +1,12 @@
 from flask import Flask, render_template, request, jsonify, send_file
 import os
+# Numba (vía pysheds) usa por defecto la capa de hilos 'workqueue', que NO es
+# segura para acceso concurrente. Forzamos un solo hilo antes de importar numba
+# y serializamos el geoproceso con un lock (ver _DELINEATION_LOCK) para evitar
+# el fallo "workqueue threading layer is terminating: concurrent access".
+os.environ.setdefault("NUMBA_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+import threading
 import numpy as np
 import math
 import io
@@ -642,127 +649,10 @@ _WATERSHED_CACHE_MAX = 16
 DELINEATION_MAX_DIM = int(os.environ.get("DELINEATION_MAX_DIM", "2048"))
 
 
-def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
-    """
-    Geoproceso hidrológico sobre un DEM real (Copernicus GLO-30 remuestreado).
-
-    Usa pysheds (relleno de depresiones → dirección de flujo D8 →
-    acumulación de flujo → cuenca de aporte → red de drenaje) para delimitar
-    la cuenca que drena al punto de muestreo y extraer el cauce principal.
-
-    Retorna dict (coordenadas en lon/lat WGS84):
-      'boundary'     : [[lon,lat], ...] anillo cerrado del parteaguas
-      'channel'      : [[lon,lat], ...] cauce principal
-      'tributaries'  : [ [[lon,lat], ...], ... ] afluentes
-      'is_real'      : True
-    o None si el geoproceso falla o la cuenca resulta degenerada.
-    """
-    try:
-        import numpy as _np
-        import pyproj
-        from affine import Affine
-        from pysheds.grid import Grid
-        from pysheds.view import Raster, ViewFinder
-        from skimage import measure
-
-        dem = _np.asarray(dem, dtype=_np.float64)
-        nod = -9999.0
-        dem_clean = _np.where(_np.isfinite(dem), dem, nod)
-        if not isinstance(transform, Affine):
-            transform = Affine(*transform[:6])
-
-        crs = pyproj.CRS.from_epsg(epsg)
-        vf = ViewFinder(affine=transform, shape=dem_clean.shape,
-                        nodata=_np.float64(nod), crs=crs)
-        dem_r = Raster(dem_clean, viewfinder=vf)
-
-        grid = Grid.from_raster(dem_r)
-        filled = grid.fill_depressions(dem_r)
-        inflated = grid.resolve_flats(filled)
-        fdir = grid.flowdir(inflated)
-        acc = grid.accumulation(fdir)
-        acc_arr = _np.asarray(acc)
-
-        acc_max = float(_np.nanmax(acc_arr))
-        if not _np.isfinite(acc_max) or acc_max < 50:
-            return None
-
-        # Punto de descarga: celda de alta acumulación más cercana al muestreo
-        to_utm = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
-        x_pt, y_pt = to_utm.transform(lon, lat)
-        hi_mask = Raster((acc_arr > acc_max * 0.02).astype(_np.uint8),
-                         viewfinder=acc.viewfinder)
-        x_snap, y_snap = grid.snap_to_mask(hi_mask, (x_pt, y_pt))
-
-        catch = grid.catchment(x=x_snap, y=y_snap, fdir=fdir,
-                               xytype='coordinate')
-        catch_arr = _np.asarray(catch) > 0
-        if int(catch_arr.sum()) < 30:
-            return None
-
-        to_ll = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True)
-
-        def _cells_to_lonlat(contour_rc, step=2):
-            out = []
-            for r, c in contour_rc[::step]:
-                x, y = transform * (c, r)
-                lo, la = to_ll.transform(x, y)
-                out.append([float(lo), float(la)])
-            return out
-
-        # Parteaguas: contorno mayor de la máscara de cuenca
-        contours = measure.find_contours(catch_arr.astype(float), 0.5)
-        if not contours:
-            return None
-        biggest = max(contours, key=len)
-        biggest = measure.approximate_polygon(biggest, tolerance=0.7)
-        boundary = _cells_to_lonlat(biggest, step=1)
-        if len(boundary) < 4:
-            return None
-        if boundary[0] != boundary[-1]:
-            boundary.append(boundary[0])
-
-        # Red de drenaje dentro de la cuenca
-        channel, tributaries = [], []
-        try:
-            grid.clip_to(Raster(catch_arr.astype(_np.uint8),
-                                viewfinder=fdir.viewfinder))
-            acc_clip = grid.view(acc, nodata=0)
-            fdir_clip = grid.view(fdir, nodata=0)
-            acc_c = _np.asarray(acc_clip)
-            thr = max(float(_np.nanmax(acc_c)) * 0.02, 30.0)
-            net = grid.extract_river_network(
-                fdir_clip,
-                Raster((acc_c > thr).astype(_np.uint8),
-                       viewfinder=fdir_clip.viewfinder))
-            feats = net.get('features', [])
-
-            def _coords_to_lonlat(coords):
-                out = []
-                for x, y in coords:
-                    lo, la = to_ll.transform(x, y)
-                    out.append([float(lo), float(la)])
-                return out
-
-            lines = [_coords_to_lonlat(f['geometry']['coordinates'])
-                     for f in feats if f['geometry']['coordinates']]
-            lines = [ln for ln in lines if len(ln) >= 2]
-            if lines:
-                lines.sort(key=len, reverse=True)
-                channel = lines[0]
-                tributaries = lines[1:16]
-        except Exception as e:
-            print(f"river network extraction failed: {e}")
-
-        return {
-            "boundary": boundary,
-            "channel": channel,
-            "tributaries": tributaries,
-            "is_real": True,
-        }
-    except Exception as e:
-        print(f"delineate_watershed_from_dem failed: {e}")
-        return None
+# Serializa el geoproceso: las funciones numba parallel de pysheds no admiten
+# acceso concurrente (warmup en hilo de fondo + peticiones). El lock garantiza
+# que solo un hilo entre al geoproceso a la vez dentro de cada worker.
+_DELINEATION_LOCK = threading.Lock()
 
 
 def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
@@ -772,6 +662,7 @@ def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
     Usa pysheds (relleno de depresiones → dirección de flujo D8 →
     acumulación de flujo → cuenca de aporte → red de drenaje) para delimitar
     la cuenca que drena al punto de muestreo y extraer el cauce principal.
+    Serializado con _DELINEATION_LOCK por la seguridad de hilos de numba.
 
     Retorna dict (coordenadas en lon/lat WGS84):
       'boundary'     : [[lon,lat], ...] anillo cerrado del parteaguas
@@ -780,6 +671,11 @@ def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
       'is_real'      : True
     o None si el geoproceso falla o la cuenca resulta degenerada.
     """
+    with _DELINEATION_LOCK:
+        return _delineate_impl(dem, transform, epsg, lat, lon)
+
+
+def _delineate_impl(dem, transform, epsg, lat, lon):
     try:
         import numpy as _np
         import pyproj
@@ -2238,7 +2134,6 @@ def _warmup_geoprocess():
 # Lanza el warmup en segundo plano al importar el módulo (gunicorn importa
 # app:app), sin demorar el bind del puerto.
 try:
-    import threading
     threading.Thread(target=_warmup_geoprocess, daemon=True).start()
 except Exception as _e:
     print(f"No se pudo lanzar el warmup: {_e}")
