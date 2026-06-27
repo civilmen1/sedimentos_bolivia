@@ -341,6 +341,65 @@ def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=700):
         return None
 
 
+# n de Manning por clase ESA WorldCover (mismo criterio que la capa 'manning')
+_WORLDCOVER_MANNING = {
+    10: 0.120, 20: 0.080, 30: 0.050, 40: 0.040, 50: 0.025,
+    60: 0.022, 70: 0.010, 80: 0.030, 90: 0.080, 95: 0.120, 100: 0.050,
+}
+_WORLDCOVER_NAMES = {
+    10: "Bosque", 20: "Arbustos", 30: "Pastizal", 40: "Cultivos",
+    50: "Urbano", 60: "Suelo desnudo", 70: "Nieve/Hielo", 80: "Agua",
+    90: "Humedal", 95: "Mangle", 100: "Musgo/Liquen",
+}
+
+
+def compute_basin_weighted_manning(boundary_lonlat):
+    """
+    Coeficiente de Manning (n) ponderado por área dentro de la cuenca, a partir
+    de la cobertura ESA WorldCover 2021 (10 m). `boundary_lonlat` es la lista
+    [[lon,lat], ...] del parteaguas.
+
+    Retorna dict {'n_weighted', 'classes':[{code,name,n,area_pct}], 'source'}
+    o None si GEE no está disponible o falla.
+    """
+    if not _GEE_READY or not boundary_lonlat or len(boundary_lonlat) < 4:
+        return None
+    try:
+        ring = [[float(p[0]), float(p[1])] for p in boundary_lonlat]
+        basin = ee.Geometry.Polygon([ring])
+        lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(basin)
+        hist = lc.reduceRegion(
+            reducer=ee.Reducer.frequencyHistogram(),
+            geometry=basin, scale=10, maxPixels=1e10, bestEffort=True,
+        ).get("Map").getInfo()
+        if not hist:
+            return None
+        total = sum(hist.values())
+        if total <= 0:
+            return None
+        n_weighted = 0.0
+        classes = []
+        for code_str, count in sorted(hist.items(), key=lambda kv: -kv[1]):
+            code = int(float(code_str))
+            n_cls = _WORLDCOVER_MANNING.get(code, 0.05)
+            frac = count / total
+            n_weighted += n_cls * frac
+            classes.append({
+                "code": code,
+                "name": _WORLDCOVER_NAMES.get(code, str(code)),
+                "n": round(n_cls, 3),
+                "area_pct": round(frac * 100, 1),
+            })
+        return {
+            "n_weighted": round(n_weighted, 4),
+            "classes": classes,
+            "source": "ESA WorldCover 2021 (10 m) — n ponderado por área de cuenca",
+        }
+    except Exception as e:
+        print(f"compute_basin_weighted_manning failed: {e}")
+        return None
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # CUENCA HIDROGRÁFICA Y RED DE DRENAJE (HydroSHEDS — respaldo)
 # ════════════════════════════════════════════════════════════════════════════

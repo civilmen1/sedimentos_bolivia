@@ -93,8 +93,35 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 </figure>
 {% endif %}
 
+{% if results.morphometry %}
+{% set m = results.morphometry %}
+<h2>2.2 Parámetros Morfométricos de la Cuenca</h2>
+<p>La cuenca tributaria se delimitó mediante geoproceso hidrológico (pysheds) sobre el DEM Copernicus GLO-30 remuestreado a 12.5 m. Área A = {{ m.area_km2 }} km², perímetro P = {{ m.perimeter_km }} km, longitud del cauce principal Lc = {{ m.channel_length_km }} km, relieve ΔH = {{ m.relief_m }} m. La pendiente del cauce principal Sc = {{ m.channel_slope_mm }} m/m ({{ m.channel_slope_pct }}%) es el valor que alimenta los modelos de transporte.</p>
+<p class="tbl-caption"><span class="tbl-title">Tabla 1a.</span> Parámetros morfométricos (DEM Copernicus 12.5 m + pysheds)</p>
+<table>
+  <thead><tr><th>Parámetro</th><th>Símbolo</th><th>Valor</th><th>Unidad</th></tr></thead>
+  <tbody>
+    <tr><td>Área de la cuenca</td><td>A</td><td class="td-num">{{ m.area_km2 }}</td><td>km²</td></tr>
+    <tr><td>Perímetro</td><td>P</td><td class="td-num">{{ m.perimeter_km }}</td><td>km</td></tr>
+    <tr><td>Longitud de la cuenca</td><td>Lb</td><td class="td-num">{{ m.basin_length_km }}</td><td>km</td></tr>
+    <tr><td>Longitud del cauce principal</td><td>Lc</td><td class="td-num">{{ m.channel_length_km }}</td><td>km</td></tr>
+    <tr><td>Pendiente del cauce / de la cuenca</td><td>Sc / Sb</td><td class="td-num">{{ m.channel_slope_pct }} / {{ m.basin_slope_pct }}</td><td>%</td></tr>
+    <tr><td>Cotas mín/máx/media</td><td>—</td><td class="td-num">{{ m.elev_min_m }}/{{ m.elev_max_m }}/{{ m.elev_mean_m }}</td><td>m</td></tr>
+    <tr><td>Densidad de drenaje</td><td>Dd</td><td class="td-num">{{ m.drainage_density }}</td><td>km/km²</td></tr>
+    <tr><td>Sinuosidad</td><td>Si</td><td class="td-num">{{ m.sinuosity }}</td><td>—</td></tr>
+    <tr><td>Compacidad / Forma / Elongación</td><td>Kc/Rf/Re</td><td class="td-num">{{ m.gravelius_kc }} / {{ m.form_factor_rf }} / {{ m.elongation_re }}</td><td>—</td></tr>
+    <tr><td>Tiempo de concentración (Kirpich)</td><td>tc</td><td class="td-num">{{ m.tc_kirpich_min }}</td><td>min</td></tr>
+    {% if results.manning %}<tr><td>n de Manning ponderado (cuenca)</td><td>n</td><td class="td-num">{{ results.manning.n_weighted }}</td><td>—</td></tr>{% endif %}
+  </tbody>
+</table>
+<p class="tbl-note no-indent"><strong>Nota.</strong> Geoproceso con pysheds sobre DEM Copernicus GLO-30 (12.5 m), UTM WGS84. Sc alimenta los modelos del Capítulo 6.{% if results.manning %} n ponderado por área de cobertura ESA WorldCover 2021.{% endif %}</p>
+
+<h2>2.3 Descripción Hidrológica</h2>
+<p>Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s. La región presenta un régimen hidrológico estacional andino-amazónico, con concentración del 70–85% de la precipitación anual en la época húmeda (noviembre–marzo).</p>
+{% else %}
 <h2>2.2 Descripción Hidrológica</h2>
-<p>La pendiente del cauce S = {{ results.slope }} m/m ({{ results.slope_pct }}%) se obtuvo del Modelo Digital de Elevación SRTM (resolución 30 m) procesado en GEE. Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s. La región presenta un régimen hidrológico estacional andino-amazónico, con concentración del 70–85% de la precipitación anual en la época húmeda (noviembre–marzo).</p>
+<p>La pendiente del cauce S = {{ results.slope }} m/m ({{ results.slope_pct }}%) se obtuvo del Modelo Digital de Elevación procesado en GEE. Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s. La región presenta un régimen hidrológico estacional andino-amazónico, con concentración del 70–85% de la precipitación anual en la época húmeda (noviembre–marzo).</p>
+{% endif %}
 
 <!-- ═══════════════════ CAP. 3 ═══════════════════ -->
 <h1>3. Morfología del Río</h1>

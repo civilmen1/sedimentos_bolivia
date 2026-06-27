@@ -34,6 +34,7 @@ from utils.gee_handler import (
     fetch_gee_thumbnail,
     fetch_copernicus_dem,
     fetch_s2_rgb,
+    compute_basin_weighted_manning,
     utm_epsg,
     LAYER_META,
     get_slope_from_dem,
@@ -741,8 +742,9 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
         if boundary[0] != boundary[-1]:
             boundary.append(boundary[0])
 
-        # Red de drenaje dentro de la cuenca
+        # Red de drenaje dentro de la cuenca (coords UTM para métricas)
         channel, tributaries = [], []
+        lines_utm = []
         try:
             grid.clip_to(Raster(catch_arr.astype(_np.uint8),
                                 viewfinder=fdir.viewfinder))
@@ -755,32 +757,159 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
                 Raster((acc_c > thr).astype(_np.uint8),
                        viewfinder=fdir_clip.viewfinder))
             feats = net.get('features', [])
+            lines_utm = [f['geometry']['coordinates']
+                         for f in feats
+                         if f['geometry']['coordinates']
+                         and len(f['geometry']['coordinates']) >= 2]
+            lines_utm.sort(key=len, reverse=True)
 
             def _coords_to_lonlat(coords):
-                out = []
-                for x, y in coords:
-                    lo, la = to_ll.transform(x, y)
-                    out.append([float(lo), float(la)])
-                return out
+                return [[float(lo), float(la)]
+                        for lo, la in (to_ll.transform(x, y) for x, y in coords)]
 
-            lines = [_coords_to_lonlat(f['geometry']['coordinates'])
-                     for f in feats if f['geometry']['coordinates']]
-            lines = [ln for ln in lines if len(ln) >= 2]
-            if lines:
-                lines.sort(key=len, reverse=True)
-                channel = lines[0]
-                tributaries = lines[1:16]
+            if lines_utm:
+                channel = _coords_to_lonlat(lines_utm[0])
+                tributaries = [_coords_to_lonlat(c) for c in lines_utm[1:16]]
         except Exception as e:
             print(f"river network extraction failed: {e}")
+
+        # ── Morfometría a partir del DEM real (hydro-tool) ──────────────────
+        morphometry = _compute_morphometry(
+            dem_clean, transform, catch_arr, biggest,
+            lines_utm, (x_snap, y_snap), nodata=nod)
 
         return {
             "boundary": boundary,
             "channel": channel,
             "tributaries": tributaries,
+            "morphometry": morphometry,
             "is_real": True,
         }
     except Exception as e:
         print(f"delineate_watershed_from_dem failed: {e}")
+        return None
+
+
+def _polyline_length(coords):
+    """Longitud de una polilínea (lista de (x,y) en metros)."""
+    import numpy as _np
+    if not coords or len(coords) < 2:
+        return 0.0
+    a = _np.asarray(coords, dtype=float)
+    return float(_np.hypot(*(a[1:] - a[:-1]).T).sum())
+
+
+def _compute_morphometry(dem, transform, catch_arr, boundary_rc,
+                         lines_utm, pour_xy, nodata=-9999.0):
+    """
+    Parámetros morfométricos de la cuenca y la red de drenaje a partir del DEM
+    real y la delineación pysheds. Todo en SI; coordenadas del DEM en UTM (m).
+    """
+    import numpy as _np
+    try:
+        res_x = abs(transform.a)
+        res_y = abs(transform.e)
+        cell_area = res_x * res_y
+
+        # Área de la cuenca
+        n_cells = int(catch_arr.sum())
+        area_m2 = n_cells * cell_area
+        area_km2 = area_m2 / 1e6
+        if area_km2 <= 0:
+            return None
+
+        # Perímetro: contorno del parteaguas en UTM
+        bpts = _np.array([transform * (c, r) for r, c in boundary_rc])
+        perimeter_m = _polyline_length(bpts.tolist())
+        perimeter_km = perimeter_m / 1000.0
+
+        # Estadísticos de elevación dentro de la cuenca
+        dem_m = _np.where(catch_arr & (dem != nodata) & _np.isfinite(dem),
+                          dem, _np.nan)
+        elev_min = float(_np.nanmin(dem_m))
+        elev_max = float(_np.nanmax(dem_m))
+        elev_mean = float(_np.nanmean(dem_m))
+        relief = elev_max - elev_min
+
+        # Pendiente media de la cuenca (magnitud del gradiente del DEM)
+        gy, gx = _np.gradient(_np.where(_np.isnan(dem_m), elev_mean, dem_m),
+                              res_y, res_x)
+        slope_grid = _np.hypot(gx, gy)            # m/m
+        basin_slope = float(_np.nanmean(_np.where(catch_arr, slope_grid, _np.nan)))
+
+        # Longitud total de cauces y densidad de drenaje
+        total_stream_m = sum(_polyline_length(c) for c in lines_utm)
+        drainage_density = (total_stream_m / 1000.0) / area_km2  # km/km²
+
+        # Cauce principal: longitud, pendiente y sinuosidad
+        channel_len_m = _polyline_length(lines_utm[0]) if lines_utm else 0.0
+
+        def _elev_at(xy):
+            inv = ~transform
+            c, r = inv * (xy[0], xy[1])
+            ri, ci = int(round(r)), int(round(c))
+            if 0 <= ri < dem.shape[0] and 0 <= ci < dem.shape[1]:
+                v = dem[ri, ci]
+                return float(v) if (v != nodata and _np.isfinite(v)) else _np.nan
+            return _np.nan
+
+        channel_slope = _np.nan
+        sinuosity = _np.nan
+        if lines_utm and channel_len_m > 0:
+            head = lines_utm[0][0]
+            mouth = lines_utm[0][-1]
+            e_head, e_mouth = _elev_at(head), _elev_at(mouth)
+            # Asegura head = cota mayor, mouth = cota menor
+            if _np.isfinite(e_head) and _np.isfinite(e_mouth):
+                dz = abs(e_head - e_mouth)
+                channel_slope = dz / channel_len_m if channel_len_m > 0 else _np.nan
+            straight = float(_np.hypot(mouth[0] - head[0], mouth[1] - head[1]))
+            sinuosity = channel_len_m / straight if straight > 0 else _np.nan
+
+        # Longitud de la cuenca (outlet → punto más lejano del parteaguas)
+        d = _np.hypot(bpts[:, 0] - pour_xy[0], bpts[:, 1] - pour_xy[1])
+        basin_length_m = float(d.max()) if len(d) else _np.nan
+        basin_length_km = basin_length_m / 1000.0
+
+        # Índices de forma
+        gravelius = 0.2821 * perimeter_km / math.sqrt(area_km2) if area_km2 > 0 else _np.nan
+        form_factor = area_km2 / (basin_length_km ** 2) if basin_length_km > 0 else _np.nan
+        elongation = (1.1284 * math.sqrt(area_km2) / basin_length_km
+                      if basin_length_km > 0 else _np.nan)
+
+        # Tiempo de concentración (Kirpich, L y S del cauce principal)
+        tc_kirpich_h = _np.nan
+        if _np.isfinite(channel_slope) and channel_slope > 0 and channel_len_m > 0:
+            tc_kirpich_h = 0.000325 * (channel_len_m ** 0.77) / (channel_slope ** 0.385)
+
+        def _r(v, n=3):
+            return round(float(v), n) if v is not None and _np.isfinite(v) else None
+
+        return {
+            "area_km2": _r(area_km2, 3),
+            "perimeter_km": _r(perimeter_km, 3),
+            "basin_length_km": _r(basin_length_km, 3),
+            "elev_min_m": _r(elev_min, 1),
+            "elev_max_m": _r(elev_max, 1),
+            "elev_mean_m": _r(elev_mean, 1),
+            "relief_m": _r(relief, 1),
+            "basin_slope_mm": _r(basin_slope, 4),
+            "basin_slope_pct": _r(basin_slope * 100, 2),
+            "channel_length_km": _r(channel_len_m / 1000.0, 3),
+            "channel_slope_mm": _r(channel_slope, 5),
+            "channel_slope_pct": _r(channel_slope * 100, 3),
+            "sinuosity": _r(sinuosity, 3),
+            "total_stream_length_km": _r(total_stream_m / 1000.0, 3),
+            "drainage_density": _r(drainage_density, 3),
+            "n_streams": len(lines_utm),
+            "gravelius_kc": _r(gravelius, 3),
+            "form_factor_rf": _r(form_factor, 4),
+            "elongation_re": _r(elongation, 3),
+            "tc_kirpich_h": _r(tc_kirpich_h, 3),
+            "tc_kirpich_min": _r(tc_kirpich_h * 60.0, 1) if _np.isfinite(tc_kirpich_h) else None,
+        }
+    except Exception as e:
+        print(f"_compute_morphometry failed: {e}")
         return None
 
 
@@ -831,6 +960,7 @@ def _synthetic_watershed(lat, lon, radius_km=15.0):
         "boundary": boundary,
         "channel": channel,
         "tributaries": tributaries,
+        "morphometry": None,   # no hay morfometría real sin DEM
         "is_real": False,
     }
 
@@ -863,6 +993,51 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
         _WATERSHED_CACHE.pop(next(iter(_WATERSHED_CACHE)))
     _WATERSHED_CACHE[key] = data
     return data
+
+
+# Caché de n de Manning ponderado por cuenca (evita reconsultar GEE)
+_MANNING_CACHE = {}
+
+
+def watershed_model_inputs(lat, lon, slope_input):
+    """
+    Deriva los parámetros ponderados de la cuenca (geoproceso real) para
+    alimentar los modelos: pendiente del cauce principal y n de Manning
+    ponderado por cobertura. Si no hay cuenca real, conserva el valor de
+    entrada del usuario.
+    """
+    wd = get_watershed_overlay(lat, lon)
+    morph = wd.get("morphometry") if wd else None
+    is_real = bool(wd and wd.get("is_real"))
+
+    slope = slope_input
+    slope_source = "valor de entrada (usuario)"
+    if morph:
+        sc = morph.get("channel_slope_mm")
+        # Usa la pendiente del cauce si es físicamente razonable
+        if sc is not None and 1e-4 <= sc <= 0.5:
+            slope = sc
+            slope_source = ("pendiente del cauce principal — DEM Copernicus "
+                            "GLO-30 (12.5 m) + geoproceso pysheds")
+
+    manning = None
+    if is_real and wd.get("boundary"):
+        mkey = f"{round(lat,5)}|{round(lon,5)}"
+        if mkey in _MANNING_CACHE:
+            manning = _MANNING_CACHE[mkey]
+        else:
+            manning = compute_basin_weighted_manning(wd.get("boundary"))
+            if len(_MANNING_CACHE) >= 64:
+                _MANNING_CACHE.pop(next(iter(_MANNING_CACHE)))
+            _MANNING_CACHE[mkey] = manning
+
+    return {
+        "slope": slope,
+        "slope_source": slope_source,
+        "morphometry": morph,
+        "manning": manning,
+        "watershed_is_real": is_real,
+    }
 
 
 def _mask_outside_basin(ax, boundary, lon_min, lon_max, lat_min, lat_max):
@@ -1915,6 +2090,10 @@ def report():
         temp = float(request.args.get("temp", 20))
         slope = float(request.args.get("slope", 0.005))
 
+        # Valores ponderados de la cuenca (geoproceso real) para los modelos
+        wmi = watershed_model_inputs(lat, lon, slope)
+        slope = wmi["slope"]
+
         rho_w = calculate_water_density(temp)
         nu = calculate_kinematic_viscosity(temp)
         s = calculate_specific_gravity(rho_s, rho_w)
@@ -1951,6 +2130,10 @@ def report():
             "temp": temp, "depth": depth, "velocity": velocity,
             "slope": round(slope, 8),
             "slope_pct": round(slope * 100, 5),
+            "slope_source": wmi["slope_source"],
+            "morphometry": wmi["morphometry"],
+            "manning": wmi["manning"],
+            "watershed_is_real": wmi["watershed_is_real"],
             "rho_w": round(rho_w, 2),
             "nu": f"{nu:.4e}",
             "s": round(s, 4),
@@ -2004,6 +2187,10 @@ def report_pdf():
         temp = float(request.args.get("temp", 20))
         slope = float(request.args.get("slope", 0.005))
 
+        # Valores ponderados de la cuenca (geoproceso real) para los modelos
+        wmi = watershed_model_inputs(lat, lon, slope)
+        slope = wmi["slope"]
+
         rho_w = calculate_water_density(temp)
         nu = calculate_kinematic_viscosity(temp)
         s = calculate_specific_gravity(rho_s, rho_w)
@@ -2040,6 +2227,10 @@ def report_pdf():
             "temp": temp, "depth": depth, "velocity": velocity,
             "slope": round(slope, 8),
             "slope_pct": round(slope * 100, 5),
+            "slope_source": wmi["slope_source"],
+            "morphometry": wmi["morphometry"],
+            "manning": wmi["manning"],
+            "watershed_is_real": wmi["watershed_is_real"],
             "rho_w": round(rho_w, 2),
             "nu": f"{nu:.4e}",
             "s": round(s, 4),
@@ -2155,6 +2346,42 @@ def gee_status_route():
             ".json de una cuenta de servicio de Google Cloud habilitada para "
             "Earth Engine. Ver GEE_SETUP.md.")
     return jsonify(st)
+
+
+@app.route("/watershed_status")
+def watershed_status_route():
+    """
+    Diagnóstico de la cuenca: indica si la delineación es real (DEM Copernicus
+    + pysheds) o esquemática (sintética), y devuelve la morfometría calculada.
+    Uso: /watershed_status?lat=-16.5&lon=-68.15
+    """
+    try:
+        lat = float(request.args.get("lat", -16.5))
+        lon = float(request.args.get("lon", -68.15))
+        wd = get_watershed_overlay(lat, lon)
+        morph = wd.get("morphometry") if wd else None
+        is_real = bool(wd and wd.get("is_real"))
+        out = {
+            "lat": lat, "lon": lon,
+            "delineation": "real (DEM Copernicus GLO-30 + pysheds)" if is_real
+                           else "esquemática (sintética)",
+            "is_real": is_real,
+            "gee_ready": gee_ready(),
+            "n_boundary_points": len(wd.get("boundary", [])) if wd else 0,
+            "n_channel_points": len(wd.get("channel", [])) if wd else 0,
+            "n_tributaries": len(wd.get("tributaries", [])) if wd else 0,
+            "morphometry": morph,
+            "weighted_manning": (compute_basin_weighted_manning(wd.get("boundary"))
+                                 if is_real and wd.get("boundary") else None),
+        }
+        if not is_real:
+            out["nota"] = ("La cuenca es esquemática. Revisa /gee_status?probe=1 "
+                           "y los logs del Space (fetch_copernicus_dem / "
+                           "delineate_watershed_from_dem).")
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
