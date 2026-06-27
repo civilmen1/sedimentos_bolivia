@@ -23,6 +23,7 @@ from models.sediment import (
 from utils.gee_handler import (
     initialize_gee,
     gee_ready,
+    gee_status,
     fetch_gee_thumbnail,
     fetch_copernicus_dem,
     fetch_s2_rgb,
@@ -2241,6 +2242,24 @@ try:
     threading.Thread(target=_warmup_geoprocess, daemon=True).start()
 except Exception as _e:
     print(f"No se pudo lanzar el warmup: {_e}")
+
+
+@app.route("/gee_status")
+def gee_status_route():
+    """
+    Diagnóstico de Google Earth Engine. Úsalo para verificar si los datos
+    serán reales o sintéticos:  /gee_status?probe=1  hace una consulta en vivo.
+    """
+    probe = request.args.get("probe", "0") in ("1", "true", "yes")
+    st = gee_status(probe=probe)
+    st["data_mode"] = "real" if st["ready"] else "synthetic"
+    if not st["ready"]:
+        st["how_to_fix"] = (
+            "Configura el secreto EE_SERVICE_ACCOUNT_JSON en el Space "
+            "(Settings → Variables and secrets) con el contenido del archivo "
+            ".json de una cuenta de servicio de Google Cloud habilitada para "
+            "Earth Engine. Ver GEE_SETUP.md.")
+    return jsonify(st)
 
 
 if __name__ == "__main__":
