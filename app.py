@@ -35,6 +35,7 @@ from utils.gee_handler import (
     fetch_copernicus_dem,
     fetch_s2_rgb,
     compute_basin_weighted_manning,
+    last_dem_error,
     utm_epsg,
     LAYER_META,
     get_slope_from_dem,
@@ -654,6 +655,7 @@ DELINEATION_MAX_DIM = int(os.environ.get("DELINEATION_MAX_DIM", "2048"))
 # acceso concurrente (warmup en hilo de fondo + peticiones). El lock garantiza
 # que solo un hilo entre al geoproceso a la vez dentro de cada worker.
 _DELINEATION_LOCK = threading.Lock()
+_LAST_DELINEATION_ERROR = None
 
 
 def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
@@ -786,7 +788,9 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
             "is_real": True,
         }
     except Exception as e:
-        print(f"delineate_watershed_from_dem failed: {e}")
+        global _LAST_DELINEATION_ERROR
+        _LAST_DELINEATION_ERROR = f"{type(e).__name__}: {e}"
+        print(f"delineate_watershed_from_dem failed: {_LAST_DELINEATION_ERROR}")
         return None
 
 
@@ -2375,13 +2379,78 @@ def watershed_status_route():
                                  if is_real and wd.get("boundary") else None),
         }
         if not is_real:
-            out["nota"] = ("La cuenca es esquemática. Revisa /gee_status?probe=1 "
-                           "y los logs del Space (fetch_copernicus_dem / "
-                           "delineate_watershed_from_dem).")
+            out["nota"] = ("La cuenca es esquemática. Usa /watershed_debug para "
+                           "ver el error exacto del DEM / delineación.")
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/watershed_debug")
+def watershed_debug_route():
+    """
+    Ejecuta el pipeline de cuenca real paso a paso (sin caché) y reporta dónde
+    y por qué falla:  /watershed_debug?lat=-16.5&lon=-68.15
+    """
+    import numpy as _np
+    lat = float(request.args.get("lat", -16.5))
+    lon = float(request.args.get("lon", -68.15))
+    radius_km = float(request.args.get("radius", 15.0))
+    out = {"lat": lat, "lon": lon, "gee_ready": gee_ready(), "steps": {}}
+
+    if not gee_ready():
+        out["conclusion"] = "GEE no inicializado — ver /gee_status?probe=1"
+        return jsonify(out)
+
+    # Paso 1 — descarga del DEM Copernicus
+    scale_m = max(12.5, (2 * radius_km * 1000.0) / DELINEATION_MAX_DIM)
+    out["steps"]["scale_m"] = round(scale_m, 2)
+    try:
+        pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=scale_m)
+    except Exception as e:
+        pack = None
+        out["steps"]["dem_exception"] = f"{type(e).__name__}: {e}"
+
+    if pack is None:
+        out["steps"]["dem"] = "FALLO"
+        out["steps"]["dem_error"] = last_dem_error()
+        out["conclusion"] = "fetch_copernicus_dem falló (ver dem_error)."
+        return jsonify(out)
+
+    dem, transform, epsg, _extent = pack
+    finite = float(_np.isfinite(dem).mean()) * 100.0
+    out["steps"]["dem"] = "OK"
+    out["steps"]["dem_shape"] = list(dem.shape)
+    out["steps"]["dem_epsg"] = epsg
+    out["steps"]["dem_valid_pct"] = round(finite, 1)
+    try:
+        out["steps"]["dem_min_max"] = [round(float(_np.nanmin(dem)), 1),
+                                       round(float(_np.nanmax(dem)), 1)]
+    except Exception:
+        out["steps"]["dem_min_max"] = None
+
+    # Paso 2 — delineación pysheds
+    try:
+        res = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
+    except Exception as e:
+        res = None
+        out["steps"]["delineate_exception"] = f"{type(e).__name__}: {e}"
+
+    if res is None:
+        out["steps"]["delineation"] = "FALLO"
+        out["steps"]["delineation_error"] = _LAST_DELINEATION_ERROR
+        out["conclusion"] = ("El DEM se descargó pero la delineación falló "
+                             "(ver delineation_error).")
+        return jsonify(out)
+
+    out["steps"]["delineation"] = "OK"
+    out["steps"]["n_boundary"] = len(res.get("boundary", []))
+    out["steps"]["n_channel"] = len(res.get("channel", []))
+    out["morphometry"] = res.get("morphometry")
+    out["conclusion"] = ("✅ Pipeline real funciona. Si /watershed_status aún "
+                         "muestra esquemática, limpia caché reiniciando el Space.")
+    return jsonify(out)
 
 
 if __name__ == "__main__":

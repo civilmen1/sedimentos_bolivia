@@ -266,6 +266,13 @@ def utm_epsg(lat, lon):
     return (32600 + zone) if lat >= 0 else (32700 + zone)
 
 
+_LAST_DEM_ERROR = None
+
+
+def last_dem_error():
+    return _LAST_DEM_ERROR
+
+
 def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
     """
     Descarga el DEM Copernicus GLO-30 con remuestreo bicúbico (downscaling) a
@@ -278,12 +285,14 @@ def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
       - epsg       : int del huso UTM (p.ej. 32719)
       - extent     : (lon_min, lon_max, lat_min, lat_max)
     """
+    global _LAST_DEM_ERROR
+    _LAST_DEM_ERROR = None
     if not _GEE_READY:
+        _LAST_DEM_ERROR = "GEE no inicializado"
         return None
     try:
         import requests
         import numpy as np
-        import rasterio
         from rasterio.io import MemoryFile
 
         region = _build_region(lat, lon, radius_km)
@@ -302,6 +311,12 @@ def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
         resp = requests.get(url, timeout=180)
         resp.raise_for_status()
 
+        # GEE puede responder 200 con un cuerpo de error (no es un GeoTIFF)
+        ctype = resp.headers.get("Content-Type", "")
+        if "tif" not in ctype and "octet-stream" not in ctype and "zip" not in ctype:
+            snippet = resp.content[:300].decode("utf-8", "replace")
+            raise RuntimeError(f"respuesta no-GeoTIFF (Content-Type={ctype}): {snippet}")
+
         with MemoryFile(resp.content) as mf:
             with mf.open() as ds:
                 arr = ds.read(1).astype("float64")
@@ -316,7 +331,8 @@ def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
         extent = (lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat)
         return arr, transform, epsg, extent
     except Exception as e:
-        print(f"fetch_copernicus_dem failed: {e}")
+        _LAST_DEM_ERROR = f"{type(e).__name__}: {e}"
+        print(f"fetch_copernicus_dem failed: {_LAST_DEM_ERROR}")
         return None
 
 
