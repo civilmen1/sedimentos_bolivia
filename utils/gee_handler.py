@@ -16,18 +16,32 @@ import json
 import math
 
 _GEE_READY = False
+_GEE_ERROR = None          # último error de inicialización (para diagnóstico)
+_GEE_EMAIL = None          # cuenta de servicio usada
+_GEE_PROJECT = None        # proyecto de Google Cloud usado
+_GEE_METHOD = None         # método de autenticación que tuvo éxito
 
 
 def initialize_gee():
     """Inicializa GEE con cuenta de servicio o credenciales por defecto."""
-    global _GEE_READY
+    global _GEE_READY, _GEE_ERROR, _GEE_EMAIL, _GEE_PROJECT, _GEE_METHOD
+    _GEE_ERROR = None
     try:
         sa_json = (os.environ.get("EE_SERVICE_ACCOUNT_JSON")
                    or os.environ.get("GEE_SERVICE_ACCOUNT_JSON"))
         if sa_json:
-            info = json.loads(sa_json)
+            try:
+                info = json.loads(sa_json)
+            except json.JSONDecodeError as je:
+                raise ValueError(
+                    "EE_SERVICE_ACCOUNT_JSON no es un JSON válido: "
+                    f"{je}. Pega el contenido completo del archivo .json de la "
+                    "cuenta de servicio (incluyendo las llaves { }).")
             email = info.get("client_email")
             project = info.get("project_id")
+            if not email:
+                raise ValueError(
+                    "El JSON de la cuenta de servicio no contiene 'client_email'.")
             creds = ee.ServiceAccountCredentials(email, key_data=sa_json)
             if project:
                 ee.Initialize(creds, project=project)
@@ -35,6 +49,9 @@ def initialize_gee():
                 ee.Initialize(creds)
             print(f"GEE inicializado con cuenta de servicio: {email}")
             _GEE_READY = True
+            _GEE_EMAIL = email
+            _GEE_PROJECT = project
+            _GEE_METHOD = "service_account_json"
             return True
 
         key_file = os.environ.get("EE_SERVICE_ACCOUNT_FILE")
@@ -44,6 +61,8 @@ def initialize_gee():
             ee.Initialize(creds)
             print(f"GEE inicializado con archivo de cuenta de servicio: {sa_email}")
             _GEE_READY = True
+            _GEE_EMAIL = sa_email
+            _GEE_METHOD = "service_account_file"
             return True
 
         project = os.environ.get("GEE_PROJECT")
@@ -53,15 +72,56 @@ def initialize_gee():
             ee.Initialize()
         print("GEE inicializado con credenciales por defecto.")
         _GEE_READY = True
+        _GEE_PROJECT = project
+        _GEE_METHOD = "default_credentials"
         return True
     except Exception as e:
         print(f"GEE Initialization failed: {e}")
         _GEE_READY = False
+        _GEE_ERROR = str(e)
         return False
 
 
 def gee_ready():
     return _GEE_READY
+
+
+def gee_status(probe=False):
+    """
+    Diagnóstico del estado de Google Earth Engine.
+
+    Si probe=True realiza una consulta mínima en vivo para verificar que la
+    cuenta tiene acceso real a datos (no solo que la inicialización no falló).
+    """
+    has_json = bool(os.environ.get("EE_SERVICE_ACCOUNT_JSON")
+                    or os.environ.get("GEE_SERVICE_ACCOUNT_JSON"))
+    has_file = bool(os.environ.get("EE_SERVICE_ACCOUNT_FILE")
+                    and os.environ.get("EE_SERVICE_ACCOUNT_EMAIL"))
+    status = {
+        "ready": _GEE_READY,
+        "method": _GEE_METHOD,
+        "service_account": _GEE_EMAIL,
+        "project": _GEE_PROJECT,
+        "init_error": _GEE_ERROR,
+        "env_EE_SERVICE_ACCOUNT_JSON_present": has_json,
+        "env_service_account_file_present": has_file,
+        "probe": None,
+        "probe_error": None,
+    }
+    if probe and _GEE_READY:
+        try:
+            val = (ee.Image("USGS/SRTMGL1_003")
+                   .reduceRegion(
+                       reducer=ee.Reducer.first(),
+                       geometry=ee.Geometry.Point([-68.15, -16.5]),
+                       scale=30)
+                   .getInfo())
+            status["probe"] = "ok"
+            status["probe_sample"] = val
+        except Exception as e:
+            status["probe"] = "failed"
+            status["probe_error"] = str(e)
+    return status
 
 
 # ════════════════════════════════════════════════════════════════════════════

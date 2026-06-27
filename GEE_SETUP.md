@@ -64,6 +64,35 @@ En la galería `/maps` aparecerá el indicador **🛰 Datos satelitales reales �
 Google Earth Engine**. Si en cambio ves **⚠ Datos de demostración**, revisa que
 el secreto esté bien pegado y que la cuenta esté autorizada en Earth Engine.
 
+### Diagnóstico en vivo: `/gee_status`
+
+Abre en el navegador (sustituye por la URL de tu Space):
+
+```
+https://<tu-space>.hf.space/gee_status?probe=1
+```
+
+Devuelve un JSON con el estado exacto:
+
+- `data_mode`: `"real"` o `"synthetic"`.
+- `ready`: `true` si GEE se inicializó.
+- `env_EE_SERVICE_ACCOUNT_JSON_present`: `true` si el secreto está definido.
+- `init_error`: motivo si la inicialización falló (JSON mal pegado, cuenta no
+  registrada, etc.).
+- `probe` / `probe_error`: con `?probe=1` hace una consulta real al DEM SRTM;
+  `"ok"` confirma acceso efectivo a datos. Si `probe` falla pero `ready` es
+  `true`, normalmente la cuenta de servicio **no está autorizada en Earth
+  Engine** (paso 6).
+
+Casos típicos:
+
+| Síntoma en `/gee_status` | Causa | Solución |
+|--------------------------|-------|----------|
+| `env_..._present: false` | Secreto no configurado | Añade `EE_SERVICE_ACCOUNT_JSON` (paso 2) |
+| `init_error` con "JSON no es válido" | Pegaste mal el contenido | Pega el archivo `.json` completo |
+| `ready: true`, `probe: failed` | Cuenta sin acceso a EE | Registra el proyecto y autoriza la cuenta (pasos 3 y 6) |
+| `data_mode: real`, `probe: ok` | Todo correcto | ✅ |
+
 ## Seguridad
 
 - **Nunca** subas el archivo JSON ni el contenido de `EE_SERVICE_ACCOUNT_JSON`
