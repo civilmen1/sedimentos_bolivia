@@ -1010,26 +1010,40 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
     data = None
     if gee_ready():
-        # Balance memoria/resolución: objetivo 12.5 m, acotando la malla de
-        # geoproceso a ≤ DELINEATION_MAX_DIM px por lado. A 2048 px se obtiene
-        # 12.5 m para radios ≤ ~12.8 km y ~14.6 m para radio 15 km.
-        # Si la descarga del DEM falla a esa resolución (tamaño/timeout), se
-        # reintenta con escalas progresivamente más gruesas antes de caer al
-        # fallback esquemático: así la cuenca sigue siendo REAL.
-        base_scale = max(12.5, (2 * radius_km * 1000.0) / DELINEATION_MAX_DIM)
-        candidate_scales = []
-        for sc in (base_scale, 30.0, 60.0, 90.0):
-            if sc not in candidate_scales:
-                candidate_scales.append(sc)
-        for sc in candidate_scales:
-            dem_pack = fetch_copernicus_dem(lat, lon, radius_km, scale_m=sc)
-            if dem_pack is None:
-                continue
-            dem, transform, epsg, _extent = dem_pack
-            data = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
-            if data is not None:
-                data["dem_scale_m"] = round(sc, 1)
-                break
+        # La cuenca aguas arriba del punto puede ser más grande que la ventana
+        # de análisis. Si a un radio dado la cuenca sale degenerada (área muy
+        # pequeña), se AMPLÍA la ventana (15 → 30 → 60 → 100 km) hasta capturar
+        # una cuenca real. Para cada radio, si la descarga del DEM falla por
+        # tamaño/timeout, se reintenta con una escala más gruesa.
+        MIN_AREA_KM2 = 2.0          # umbral de cuenca "no degenerada"
+        best = None
+        best_area = -1.0
+        for R in (radius_km, 30.0, 60.0, 100.0):
+            base_scale = max(12.5, (2 * R * 1000.0) / DELINEATION_MAX_DIM)
+            scales = []
+            for sc in (base_scale, base_scale * 2, 90.0):
+                sc = round(sc, 2)
+                if sc not in scales:
+                    scales.append(sc)
+            radius_result = None
+            for sc in scales:
+                dem_pack = fetch_copernicus_dem(lat, lon, R, scale_m=sc)
+                if dem_pack is None:
+                    continue
+                dem, transform, epsg, _extent = dem_pack
+                d = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
+                if d is not None:
+                    d["dem_scale_m"] = round(sc, 1)
+                    d["analysis_radius_km"] = R
+                    radius_result = d
+                    break
+            if radius_result is not None:
+                area = (radius_result.get("morphometry") or {}).get("area_km2") or 0.0
+                if area > best_area:
+                    best, best_area = radius_result, area
+                if area >= MIN_AREA_KM2:
+                    break   # cuenca razonable: no hace falta ampliar más
+        data = best
 
     if data is None:
         data = _synthetic_watershed(lat, lon, radius_km)
@@ -2412,6 +2426,8 @@ def watershed_status_route():
                            else "esquemática (sintética)",
             "is_real": is_real,
             "gee_ready": gee_ready(),
+            "analysis_radius_km": wd.get("analysis_radius_km") if wd else None,
+            "dem_scale_m": wd.get("dem_scale_m") if wd else None,
             "n_boundary_points": len(wd.get("boundary", [])) if wd else 0,
             "n_channel_points": len(wd.get("channel", [])) if wd else 0,
             "n_tributaries": len(wd.get("tributaries", [])) if wd else 0,
