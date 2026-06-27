@@ -391,8 +391,50 @@ table tfoot td {
   </figure>
   {% endif %}
 
-  <h2>2.2 Características de la Cuenca</h2>
-  <p>La cuenca tributaria al sitio de muestreo presenta una superficie de [Área km²], con una longitud del cauce principal de [Lc km] y un desnivel entre la cabecera y el punto de cierre de [ΔH m]. La pendiente media del cauce calculada satelitalmente es de S = {{ results.slope }} m/m ({{ results.slope_pct }}%), valor que encuadra la dinámica de transporte en el régimen {% if results.slope > 0.02 %}de alta energía, característico de ríos de montaña{% elif results.slope > 0.005 %}transicional, con alternancia de tramos empinados y llanos{% else %}de baja energía, propio de llanuras de inundación{% endif %}.</p>
+  <h2>2.2 Parámetros Morfométricos de la Cuenca</h2>
+  {% if results.morphometry %}
+  {% set m = results.morphometry %}
+  <p>La cuenca tributaria al sitio de muestreo fue delimitada mediante geoproceso hidrológico sobre el Modelo Digital de Elevación Copernicus GLO-30 remuestreado por interpolación bicúbica a 12.5 m (relleno de depresiones, dirección de flujo D8, acumulación de flujo y cuenca de aporte con la librería <em>pysheds</em>). Presenta una superficie de <strong>{{ m.area_km2 }} km²</strong> y un perímetro de <strong>{{ m.perimeter_km }} km</strong>, con una longitud del cauce principal de <strong>{{ m.channel_length_km }} km</strong> y un desnivel total (relieve) de <strong>{{ m.relief_m }} m</strong> (cota {{ m.elev_min_m }}–{{ m.elev_max_m }} m s.n.m.). La pendiente media del cauce principal, calculada del DEM, es S = <strong>{{ m.channel_slope_mm }} m/m ({{ m.channel_slope_pct }}%)</strong>, valor que encuadra la dinámica de transporte en el régimen {% if m.channel_slope_mm > 0.02 %}de alta energía, característico de ríos de montaña{% elif m.channel_slope_mm > 0.005 %}transicional, con alternancia de tramos empinados y llanos{% else %}de baja energía, propio de llanuras de inundación{% endif %}.</p>
+
+  <p class="tbl-caption"><span class="tbl-title">Tabla 1a</span><br>Parámetros morfométricos de la cuenca (DEM Copernicus GLO-30 12.5 m + pysheds)</p>
+  <table>
+    <thead><tr><th>Parámetro</th><th>Símbolo</th><th>Valor</th><th>Unidad</th></tr></thead>
+    <tbody>
+      <tr><td>Área de la cuenca</td><td>A</td><td class="td-num">{{ m.area_km2 }}</td><td>km²</td></tr>
+      <tr><td>Perímetro</td><td>P</td><td class="td-num">{{ m.perimeter_km }}</td><td>km</td></tr>
+      <tr><td>Longitud de la cuenca</td><td>Lb</td><td class="td-num">{{ m.basin_length_km }}</td><td>km</td></tr>
+      <tr><td>Longitud del cauce principal</td><td>Lc</td><td class="td-num">{{ m.channel_length_km }}</td><td>km</td></tr>
+      <tr><td>Pendiente media del cauce</td><td>Sc</td><td class="td-num">{{ m.channel_slope_pct }}</td><td>%</td></tr>
+      <tr><td>Pendiente media de la cuenca</td><td>Sb</td><td class="td-num">{{ m.basin_slope_pct }}</td><td>%</td></tr>
+      <tr><td>Cota mínima / máxima / media</td><td>—</td><td class="td-num">{{ m.elev_min_m }} / {{ m.elev_max_m }} / {{ m.elev_mean_m }}</td><td>m s.n.m.</td></tr>
+      <tr><td>Relieve (desnivel)</td><td>ΔH</td><td class="td-num">{{ m.relief_m }}</td><td>m</td></tr>
+      <tr><td>Longitud total de cauces</td><td>ΣL</td><td class="td-num">{{ m.total_stream_length_km }}</td><td>km</td></tr>
+      <tr><td>Densidad de drenaje</td><td>Dd</td><td class="td-num">{{ m.drainage_density }}</td><td>km/km²</td></tr>
+      <tr><td>Sinuosidad del cauce</td><td>Si</td><td class="td-num">{{ m.sinuosity }}</td><td>—</td></tr>
+      <tr><td>Coeficiente de compacidad (Gravelius)</td><td>Kc</td><td class="td-num">{{ m.gravelius_kc }}</td><td>—</td></tr>
+      <tr><td>Factor de forma (Horton)</td><td>Rf</td><td class="td-num">{{ m.form_factor_rf }}</td><td>—</td></tr>
+      <tr><td>Relación de elongación (Schumm)</td><td>Re</td><td class="td-num">{{ m.elongation_re }}</td><td>—</td></tr>
+      <tr><td>Tiempo de concentración (Kirpich)</td><td>tc</td><td class="td-num">{{ m.tc_kirpich_min }}</td><td>min</td></tr>
+    </tbody>
+  </table>
+  <p class="tbl-note no-indent"><strong>Nota.</strong> Parámetros calculados con la herramienta de geoproceso hidrológico <em>pysheds</em> a partir del DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m), en proyección UTM WGS84. La pendiente del cauce S = {{ m.channel_slope_mm }} m/m derivada aquí es el valor que alimenta los modelos de transporte (Capítulo 6).</p>
+
+  {% if results.manning %}
+  <p>El coeficiente de rugosidad de Manning ponderado por el área de las clases de cobertura (ESA WorldCover 2021, 10 m) dentro de la cuenca es <strong>n = {{ results.manning.n_weighted }}</strong>, obtenido como Σ(nᵢ·Aᵢ)/A a partir de la siguiente composición de cobertura:</p>
+  <p class="tbl-caption"><span class="tbl-title">Tabla 1b</span><br>n de Manning ponderado por cobertura de la cuenca</p>
+  <table>
+    <thead><tr><th>Cobertura</th><th>n</th><th>Área (%)</th></tr></thead>
+    <tbody>
+      {% for c in results.manning.classes %}
+      <tr><td>{{ c.name }}</td><td class="td-num">{{ c.n }}</td><td class="td-num">{{ c.area_pct }}</td></tr>
+      {% endfor %}
+      <tr style="font-weight:bold;"><td>Ponderado (área)</td><td class="td-num">{{ results.manning.n_weighted }}</td><td class="td-num">100.0</td></tr>
+    </tbody>
+  </table>
+  {% endif %}
+  {% else %}
+  <p>La pendiente media del cauce empleada en el análisis es S = {{ results.slope }} m/m ({{ results.slope_pct }}%). <em>Nota: la delimitación automática de la cuenca con el DEM Copernicus no está disponible en esta ejecución (se requiere la conexión a Google Earth Engine); los parámetros morfométricos detallados se calculan cuando el geoproceso real está activo.</em></p>
+  {% endif %}
 
   <h2>2.3 Clima y Régimen Hidrológico</h2>
   <p>La región presenta un régimen hidrológico fuertemente estacional, condicionado por la circulación atmosférica andino-amazónica. La época húmeda (noviembre–marzo) concentra entre el 70 y el 85% de la precipitación anual, con eventos de crecida de corta duración y alta intensidad que movilizan la mayor parte del presupuesto sedimentario anual. La temperatura media del agua registrada in situ fue de {{ results.temp }} °C, valor que determina una densidad del fluido ρ_w = {{ results.rho_w }} kg/m³ y una viscosidad cinemática ν = {{ results.nu }} m²/s.</p>

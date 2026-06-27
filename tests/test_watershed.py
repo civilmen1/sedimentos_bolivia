@@ -144,6 +144,28 @@ def test_delineate_watershed_from_dem_synthetic():
     assert min(lons) - 0.05 <= lon <= max(lons) + 0.05
     assert min(lats) - 0.05 <= lat <= max(lats) + 0.05
 
+    # Morfometría calculada con el hydro-tool
+    m = res["morphometry"]
+    assert m is not None
+    for k in ("area_km2", "perimeter_km", "channel_length_km",
+              "channel_slope_mm", "drainage_density", "gravelius_kc",
+              "elev_min_m", "elev_max_m", "tc_kirpich_min"):
+        assert k in m and m[k] is not None, k
+    assert m["area_km2"] > 0
+    assert m["elev_max_m"] >= m["elev_min_m"]
+    assert m["channel_slope_mm"] > 0
+
+
+def test_watershed_model_inputs_fallback(monkeypatch):
+    """Sin GEE, watershed_model_inputs conserva la pendiente del usuario."""
+    monkeypatch.setattr(app_module, "gee_ready", lambda: False)
+    app_module._WATERSHED_CACHE.clear()
+    wmi = app_module.watershed_model_inputs(-16.5, -68.15, 0.005)
+    assert wmi["slope"] == 0.005
+    assert wmi["watershed_is_real"] is False
+    assert wmi["morphometry"] is None
+    assert "usuario" in wmi["slope_source"]
+
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
