@@ -361,7 +361,7 @@ MAP_AUTHOR = "Ing. Luis Franco Guarachi"
 
 # Fuentes satelitales por tipo de mapa
 MAP_SOURCES = {
-    'watershed': "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pysheds + Sentinel-2 L2A",
+    'watershed': "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pyflwdir (D8) + Sentinel-2 L2A",
     'dem':      "SRTM v3 / NASA (2000) — 30 m",
     'slope':    "SRTM v3 + ee.Terrain.slope() / GEE — 30 m",
     'ndvi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
@@ -662,20 +662,137 @@ def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
     """
     Geoproceso hidrológico sobre un DEM real (Copernicus GLO-30 remuestreado).
 
-    Usa pysheds (relleno de depresiones → dirección de flujo D8 →
-    acumulación de flujo → cuenca de aporte → red de drenaje) para delimitar
-    la cuenca que drena al punto de muestreo y extraer el cauce principal.
-    Serializado con _DELINEATION_LOCK por la seguridad de hilos de numba.
+    Motor principal: pyflwdir (Deltares) — relleno de depresiones, dirección de
+    flujo D8, área de drenaje acumulada, cuenca de aporte al punto de cierre y
+    red de drenaje. Respaldo: pysheds. Delimita la cuenca aguas arriba del punto
+    (break-point) y extrae el cauce principal.
 
     Retorna dict (coordenadas en lon/lat WGS84):
       'boundary'     : [[lon,lat], ...] anillo cerrado del parteaguas
       'channel'      : [[lon,lat], ...] cauce principal
       'tributaries'  : [ [[lon,lat], ...], ... ] afluentes
+      'morphometry'  : dict de parámetros morfométricos
       'is_real'      : True
     o None si el geoproceso falla o la cuenca resulta degenerada.
     """
     with _DELINEATION_LOCK:
+        res = _delineate_pyflwdir(dem, transform, epsg, lat, lon)
+        if res is not None:
+            return res
+        # Respaldo: pysheds
         return _delineate_impl(dem, transform, epsg, lat, lon)
+
+
+def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
+    """Delineación con pyflwdir (motor principal). Devuelve None si falla."""
+    global _LAST_DELINEATION_ERROR
+    try:
+        import numpy as _np
+        import pyproj
+        from affine import Affine
+        import pyflwdir
+        from skimage import measure
+
+        nod = -9999.0
+        dem = _np.asarray(dem, dtype=_np.float32)
+        dem_clean = _np.where(_np.isfinite(dem), dem, nod).astype(_np.float32)
+        if not isinstance(transform, Affine):
+            transform = Affine(*transform[:6])
+
+        flw = pyflwdir.from_dem(data=dem_clean, nodata=nod,
+                                transform=transform, latlon=False)
+        uparea = _np.asarray(flw.upstream_area(unit='cell'), dtype=float)
+        umax = float(_np.nanmax(uparea))
+        if not _np.isfinite(umax) or umax < 50:
+            return None
+
+        H, W = uparea.shape
+        to_utm = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+        to_ll = pyproj.Transformer.from_crs(epsg, 4326, always_xy=True)
+        x_pt, y_pt = to_utm.transform(lon, lat)
+        res_m = (abs(transform.a) + abs(transform.e)) / 2.0
+        inv = ~transform
+        cf, rf = inv * (x_pt, y_pt)
+        col0, row0 = int(round(cf)), int(round(rf))
+
+        def _basin_from(snap_r):
+            rad = max(3, int(snap_r / res_m))
+            r0, r1 = max(0, row0 - rad), min(H, row0 + rad + 1)
+            c0, c1 = max(0, col0 - rad), min(W, col0 + rad + 1)
+            win = uparea[r0:r1, c0:c1]
+            if win.size == 0 or not _np.isfinite(_np.nanmax(win)):
+                return None, None
+            loc = _np.unravel_index(_np.nanargmax(win), win.shape)
+            sr, sc = r0 + int(loc[0]), c0 + int(loc[1])
+            b = _np.asarray(flw.basins(idxs=_np.array([sr * W + sc]))) > 0
+            return b, (sr, sc)
+
+        # Engancha al cauce principal: prueba radios y se queda con la mayor cuenca
+        catch_arr, outlet, best = None, None, -1
+        for snap_r in (800.0, 1500.0, 2500.0, 3500.0, 5000.0):
+            b, sc = _basin_from(snap_r)
+            if b is None:
+                continue
+            nb = int(b.sum())
+            if nb > best:
+                best, catch_arr, outlet = nb, b, sc
+        if catch_arr is None or int(catch_arr.sum()) < 30:
+            return None
+
+        sr, sc = outlet
+        x_snap, y_snap = transform * (sc + 0.5, sr + 0.5)
+
+        # Parteaguas (contorno mayor de la máscara de cuenca)
+        contours = measure.find_contours(catch_arr.astype(float), 0.5)
+        if not contours:
+            return None
+        big = measure.approximate_polygon(max(contours, key=len), tolerance=0.7)
+        boundary = []
+        for r, c in big:
+            x, y = transform * (c, r)
+            lo, la = to_ll.transform(x, y)
+            boundary.append([float(lo), float(la)])
+        if len(boundary) < 4:
+            return None
+        if boundary[0] != boundary[-1]:
+            boundary.append(boundary[0])
+
+        # Red de drenaje dentro de la cuenca
+        channel, tributaries, lines_utm = [], [], []
+        try:
+            thr = max(umax * 0.01, 30.0)
+            mask = catch_arr & (uparea > thr)
+            feats = flw.streams(mask=mask)
+            lines_utm = [f['geometry']['coordinates'] for f in feats
+                         if f['geometry']['coordinates']
+                         and len(f['geometry']['coordinates']) >= 2]
+            lines_utm.sort(key=len, reverse=True)
+
+            def _to_ll(coords):
+                return [[float(lo), float(la)]
+                        for lo, la in (to_ll.transform(x, y) for x, y in coords)]
+            if lines_utm:
+                channel = _to_ll(lines_utm[0])
+                tributaries = [_to_ll(c) for c in lines_utm[1:16]]
+        except Exception as e:
+            print(f"pyflwdir streams failed: {e}")
+
+        morphometry = _compute_morphometry(
+            dem_clean, transform, catch_arr, big,
+            lines_utm, (x_snap, y_snap), nodata=nod)
+
+        return {
+            "boundary": boundary,
+            "channel": channel,
+            "tributaries": tributaries,
+            "morphometry": morphometry,
+            "is_real": True,
+            "engine": "pyflwdir",
+        }
+    except Exception as e:
+        _LAST_DELINEATION_ERROR = f"pyflwdir: {type(e).__name__}: {e}"
+        print(f"_delineate_pyflwdir failed: {_LAST_DELINEATION_ERROR}")
+        return None
 
 
 def _delineate_impl(dem, transform, epsg, lat, lon):
@@ -1077,7 +1194,7 @@ def watershed_model_inputs(lat, lon, slope_input):
         if sc is not None and 1e-4 <= sc <= 0.5:
             slope = sc
             slope_source = ("pendiente del cauce principal — DEM Copernicus "
-                            "GLO-30 (12.5 m) + geoproceso pysheds")
+                            "GLO-30 (12.5 m) + geoproceso pyflwdir")
 
     manning = None
     if is_real and wd.get("boundary"):
@@ -2432,7 +2549,7 @@ def watershed_status_route():
         is_real = bool(wd and wd.get("is_real"))
         out = {
             "lat": lat, "lon": lon,
-            "delineation": "real (DEM Copernicus GLO-30 + pysheds)" if is_real
+            "delineation": "real (DEM Copernicus GLO-30 + pyflwdir/pysheds)" if is_real
                            else "esquemática (sintética)",
             "is_real": is_real,
             "gee_ready": gee_ready(),

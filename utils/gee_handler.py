@@ -208,7 +208,7 @@ LAYER_META = {
     "watershed": {
         "vmin": 0, "vmax": 1,
         "palette": ["#cce5ff", "#4a90d9", "#003399"],
-        "source": "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pysheds + Sentinel-2 L2A",
+        "source": "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pyflwdir (D8) + Sentinel-2 L2A",
         "title": "Cuenca Hidrográfica y Red de Drenaje",
         "legend": "Elevación (m s.n.m.)",
     },
