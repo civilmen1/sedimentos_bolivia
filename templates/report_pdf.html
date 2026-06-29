@@ -96,8 +96,8 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 {% if results.morphometry %}
 {% set m = results.morphometry %}
 <h2>2.2 Parámetros Morfométricos de la Cuenca</h2>
-<p>La cuenca tributaria se delimitó mediante geoproceso hidrológico (pysheds) sobre el DEM Copernicus GLO-30 remuestreado a 12.5 m. Área A = {{ m.area_km2 }} km², perímetro P = {{ m.perimeter_km }} km, longitud del cauce principal Lc = {{ m.channel_length_km }} km, relieve ΔH = {{ m.relief_m }} m. La pendiente del cauce principal Sc = {{ m.channel_slope_mm }} m/m ({{ m.channel_slope_pct }}%) es el valor que alimenta los modelos de transporte.</p>
-<p class="tbl-caption"><span class="tbl-title">Tabla 1a.</span> Parámetros morfométricos (DEM Copernicus 12.5 m + pysheds)</p>
+<p>La cuenca tributaria se delimitó mediante geoproceso hidrológico (pyflwdir) sobre el DEM Copernicus GLO-30 remuestreado a 12.5 m. Área A = {{ m.area_km2 }} km², perímetro P = {{ m.perimeter_km }} km, longitud del cauce principal Lc = {{ m.channel_length_km }} km, relieve ΔH = {{ m.relief_m }} m. La pendiente del cauce principal Sc = {{ m.channel_slope_mm }} m/m ({{ m.channel_slope_pct }}%) es el valor que alimenta los modelos de transporte.</p>
+<p class="tbl-caption"><span class="tbl-title">Tabla 1a.</span> Parámetros morfométricos (DEM Copernicus 12.5 m + pyflwdir)</p>
 <table>
   <thead><tr><th>Parámetro</th><th>Símbolo</th><th>Valor</th><th>Unidad</th></tr></thead>
   <tbody>
@@ -114,7 +114,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
     {% if results.manning %}<tr><td>n de Manning ponderado (cuenca)</td><td>n</td><td class="td-num">{{ results.manning.n_weighted }}</td><td>—</td></tr>{% endif %}
   </tbody>
 </table>
-<p class="tbl-note no-indent"><strong>Nota.</strong> Geoproceso con pysheds sobre DEM Copernicus GLO-30 (12.5 m), UTM WGS84. Sc alimenta los modelos del Capítulo 6.{% if results.manning %} n ponderado por área de cobertura ESA WorldCover 2021.{% endif %}</p>
+<p class="tbl-note no-indent"><strong>Nota.</strong> Geoproceso con pyflwdir sobre DEM Copernicus GLO-30 (12.5 m), UTM WGS84. Sc alimenta los modelos del Capítulo 6.{% if results.manning %} n ponderado por área de cobertura ESA WorldCover 2021.{% endif %}</p>
 
 <h2>2.3 Descripción Hidrológica</h2>
 <p>Las condiciones de temperatura del agua T = {{ results.temp }} °C determinan los parámetros físicos del fluido: densidad ρ_w = {{ results.rho_w }} kg/m³ y viscosidad cinemática ν = {{ results.nu }} m²/s. La región presenta un régimen hidrológico estacional andino-amazónico, con concentración del 70–85% de la precipitación anual en la época húmeda (noviembre–marzo).</p>
@@ -349,7 +349,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <p class="tbl-note no-indent"><strong>Nota.</strong> Productos procesados en EPSG:4326. Los mapas de la Sección 8.5 se obtienen directamente desde Google Earth Engine.</p>
 
 <h2>8.5 Mapas Temáticos Satelitales</h2>
-<p>El primer mapa delimita la cuenca a partir del DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) con geoproceso hidrológico pysheds (relleno de depresiones, dirección y acumulación de flujo D8, cuenca de aporte y cauce principal). Los mapas siguientes se recortan a la cuenca y superponen el parteaguas (rojo), el cauce principal (azul oscuro) y la red de drenaje (azul). Se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración{% endif %}, en proyección UTM WGS84, con flecha norte, barra de escala, leyenda y cartela de autoría (Ing. Luis Franco Guarachi).</p>
+<p>El primer mapa delimita la cuenca a partir del DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) con geoproceso hidrológico pyflwdir (relleno de depresiones, dirección y acumulación de flujo D8, cuenca de aporte y cauce principal). Los mapas siguientes se recortan a la cuenca y superponen el parteaguas (rojo), el cauce principal (azul oscuro) y la red de drenaje (azul). Se generaron {% if results.maps_source == 'real' %}directamente desde Google Earth Engine{% else %}con datos sintéticos de demostración{% endif %}, en proyección UTM WGS84, con flecha norte, barra de escala, leyenda y cartela de autoría (Ing. Luis Franco Guarachi).</p>
 
 {% if results.maps %}
 {% set order = ['watershed','dem','slope','ndvi','ndwi','ndti','manning','risk','jrc'] %}

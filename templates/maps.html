@@ -167,7 +167,7 @@ body {
       Punto: <strong>Lat {{ lat }}°, Lon {{ lon }}°</strong>
       &ensp;|&ensp; d₅₀ = <strong>{{ d50 }} mm</strong>
       &ensp;|&ensp; d₉₀ = <strong>{{ d90 }} mm</strong>
-      &ensp;|&ensp; Cuenca delimitada (Copernicus GLO-30 + pysheds)
+      &ensp;|&ensp; Cuenca delimitada (Copernicus GLO-30 + pyflwdir)
       &ensp;|&ensp; Autor: <strong>{{ author }}</strong>
       &ensp;|&ensp; {{ date }}
     </div>
@@ -234,7 +234,7 @@ body {
 <div class="dl-section">
   <div>
     {% if maps_source == 'real' %}
-    <p>🛰 <strong>Datos reales:</strong> La cuenca se delimitó con el DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) y geoproceso pysheds; los mapas temáticos provienen de Google Earth Engine (Sentinel-2, SRTM, ESA WorldCover, JRC), recortados a la cuenca, con marco cartográfico completo (proyección UTM WGS84, norte, escala, leyenda).</p>
+    <p>🛰 <strong>Datos reales:</strong> La cuenca se delimitó con el DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) y geoproceso pyflwdir; los mapas temáticos provienen de Google Earth Engine (Sentinel-2, SRTM, ESA WorldCover, JRC), recortados a la cuenca, con marco cartográfico completo (proyección UTM WGS84, norte, escala, leyenda).</p>
     {% else %}
     <p>⚠ <strong>Modo demostración:</strong> Los mapas muestran datos sintéticos. Para obtener imágenes satelitales reales, configure la clave JSON de la cuenta de servicio de Google Earth Engine como variable de entorno <code>EE_SERVICE_ACCOUNT_JSON</code> del servidor.</p>
     {% endif %}
