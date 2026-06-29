@@ -336,6 +336,60 @@ def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
         return None
 
 
+def fetch_merit_hydro(lat, lon, radius_km=40.0, max_dim=2000):
+    """
+    Descarga MERIT Hydro (hidrografía global pre-acondicionada, ~90 m): bandas
+    'dir' (dirección de flujo D8 ESRI), 'upa' (área acumulada km²) y 'elv'
+    (elevación m). Ideal para zonas planas (Amazonía) y cuencas grandes, donde
+    el geoproceso sobre DEM crudo falla.
+
+    Retorna (dir_arr, upa_arr, elv_arr, transform, extent) en EPSG:4326,
+    o None si falla.
+    """
+    global _LAST_DEM_ERROR
+    _LAST_DEM_ERROR = None
+    if not _GEE_READY:
+        _LAST_DEM_ERROR = "GEE no inicializado"
+        return None
+    try:
+        import requests
+        import numpy as np
+        from rasterio.io import MemoryFile
+
+        region = _build_region(lat, lon, radius_km)
+        # Escala (m) acotando la malla a max_dim px por lado. Nativo MERIT ~92.77 m.
+        scale_m = max(92.77, (2 * radius_km * 1000.0) / max_dim)
+        img = ee.Image("MERIT/Hydro/v1_0_1").select(["dir", "upa", "elv"])
+        url = img.getDownloadURL({
+            "region": region,
+            "scale": scale_m,
+            "crs": "EPSG:4326",
+            "format": "GEO_TIFF",
+        })
+        resp = requests.get(url, timeout=180)
+        resp.raise_for_status()
+        ctype = resp.headers.get("Content-Type", "")
+        if "tif" not in ctype and "octet-stream" not in ctype:
+            snippet = resp.content[:300].decode("utf-8", "replace")
+            raise RuntimeError(f"respuesta no-GeoTIFF ({ctype}): {snippet}")
+
+        with MemoryFile(resp.content) as mf:
+            with mf.open() as ds:
+                dir_arr = ds.read(1).astype("int16")
+                upa_arr = ds.read(2).astype("float64")
+                elv_arr = ds.read(3).astype("float64")
+                transform = ds.transform
+
+        deg_lat = radius_km / 111.0
+        deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+        extent = (lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat)
+        return dir_arr, upa_arr, elv_arr, transform, extent
+    except Exception as e:
+        _LAST_DEM_ERROR = f"MERIT: {type(e).__name__}: {e}"
+        print(f"fetch_merit_hydro failed: {_LAST_DEM_ERROR}")
+        return None
+
+
 def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=700):
     """Fondo satelital Sentinel-2 color verdadero (B4-B3-B2) como array RGB."""
     if not _GEE_READY:
