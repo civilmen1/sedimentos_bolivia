@@ -33,6 +33,7 @@ from utils.gee_handler import (
     gee_status,
     fetch_gee_thumbnail,
     fetch_copernicus_dem,
+    fetch_merit_hydro,
     fetch_s2_rgb,
     compute_basin_weighted_manning,
     last_dem_error,
@@ -752,7 +753,7 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
             x, y = transform * (c, r)
             lo, la = to_ll.transform(x, y)
             boundary.append([float(lo), float(la)])
-        if len(boundary) < 4:
+        if len(boundary) < 3:
             return None
         if boundary[0] != boundary[-1]:
             boundary.append(boundary[0])
@@ -798,6 +799,177 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
         _LAST_DELINEATION_ERROR = f"pyflwdir: {type(e).__name__}: {e}"
         print(f"_delineate_pyflwdir failed: {_LAST_DELINEATION_ERROR}")
         return None
+
+
+def _len_lonlat(coords):
+    """Longitud (m) de una polilínea en (lon,lat) por aproximación local."""
+    if not coords or len(coords) < 2:
+        return 0.0
+    tot = 0.0
+    for i in range(1, len(coords)):
+        lo0, la0 = coords[i - 1]
+        lo1, la1 = coords[i]
+        dlat = (la1 - la0) * 111132.0
+        dlon = (lo1 - lo0) * 111320.0 * math.cos(math.radians((la0 + la1) / 2))
+        tot += math.hypot(dlon, dlat)
+    return tot
+
+
+def delineate_watershed_merit(lat, lon, radius_km=40.0):
+    """
+    Delineación con MERIT Hydro (hidrografía global pre-acondicionada 90 m) vía
+    pyflwdir. Robusta en zonas planas y cuencas grandes. El área se toma de la
+    banda 'upa' (km², exacta aunque la cuenca exceda la ventana).
+    Devuelve el mismo dict que delineate_watershed_from_dem o None.
+    """
+    global _LAST_DELINEATION_ERROR
+    pack = fetch_merit_hydro(lat, lon, radius_km)
+    if pack is None:
+        return None
+    with _DELINEATION_LOCK:
+        try:
+            import numpy as _np
+            import pyflwdir
+            from affine import Affine
+            from skimage import measure
+
+            dir_arr, upa_arr, elv_arr, transform, _extent = pack
+            if not isinstance(transform, Affine):
+                transform = Affine(*transform[:6])
+            d8 = _np.where((dir_arr >= 0) & (dir_arr <= 128),
+                           dir_arr, 0).astype(_np.uint8)
+            flw = pyflwdir.from_array(d8, ftype='d8', transform=transform,
+                                      latlon=True)
+            upa = _np.asarray(upa_arr, dtype=float)        # km² (MERIT)
+            upa = _np.where(_np.isfinite(upa), upa, 0.0)
+            H, W = upa.shape
+
+            inv = ~transform
+            cf, rf = inv * (lon, lat)
+            col0, row0 = int(round(cf)), int(round(rf))
+
+            def _basin_from(snap_cells):
+                r0, r1 = max(0, row0 - snap_cells), min(H, row0 + snap_cells + 1)
+                c0, c1 = max(0, col0 - snap_cells), min(W, col0 + snap_cells + 1)
+                win = upa[r0:r1, c0:c1]
+                if win.size == 0:
+                    return None, None, 0.0
+                loc = _np.unravel_index(_np.nanargmax(win), win.shape)
+                sr, sc = r0 + int(loc[0]), c0 + int(loc[1])
+                b = _np.asarray(flw.basins(idxs=_np.array([sr * W + sc]))) > 0
+                return b, (sr, sc), float(upa[sr, sc])
+
+            catch_arr, outlet, area_upa, best = None, None, 0.0, -1
+            for sc_cells in (5, 10, 20, 40):
+                b, oc, a = _basin_from(sc_cells)
+                if b is None:
+                    continue
+                if int(b.sum()) > best:
+                    best, catch_arr, outlet, area_upa = int(b.sum()), b, oc, a
+            if catch_arr is None or int(catch_arr.sum()) < 10:
+                return None
+
+            sr, sc = outlet
+            to_ll = lambda c, r: (transform * (c, r))   # 4326 → (lon,lat)
+
+            # Parteaguas
+            contours = measure.find_contours(catch_arr.astype(float), 0.5)
+            if not contours:
+                return None
+            big = measure.approximate_polygon(max(contours, key=len), 0.7)
+            boundary = [[float(x), float(y)]
+                        for x, y in (to_ll(c, r) for r, c in big)]
+            if len(boundary) < 3:
+                return None
+            if boundary[0] != boundary[-1]:
+                boundary.append(boundary[0])
+
+            # Red de drenaje
+            channel, tributaries, lines_ll = [], [], []
+            try:
+                thr = max(float(_np.nanmax(upa)) * 0.01, 1.0)
+                mask = catch_arr & (upa > thr)
+                feats = flw.streams(mask=mask)
+                lines_ll = [f['geometry']['coordinates'] for f in feats
+                            if len(f['geometry']['coordinates']) >= 2]
+                lines_ll.sort(key=len, reverse=True)
+                if lines_ll:
+                    channel = [[float(x), float(y)] for x, y in lines_ll[0]]
+                    tributaries = [[[float(x), float(y)] for x, y in c]
+                                   for c in lines_ll[1:16]]
+            except Exception as e:
+                print(f"MERIT streams failed: {e}")
+
+            # Morfometría (lon/lat → m)
+            area_km2 = area_upa if area_upa > 0 else \
+                int(catch_arr.sum()) * (92.77 ** 2) / 1e6
+            perimeter_km = _len_lonlat(boundary) / 1000.0
+            channel_len_km = (_len_lonlat(channel) / 1000.0) if channel else 0.0
+            total_stream_km = sum(_len_lonlat(
+                [[x, y] for x, y in c]) for c in lines_ll) / 1000.0
+            elv = _np.where(catch_arr & _np.isfinite(elv_arr), elv_arr, _np.nan)
+            e_min = float(_np.nanmin(elv)); e_max = float(_np.nanmax(elv))
+            e_mean = float(_np.nanmean(elv)); relief = e_max - e_min
+            # Pendiente del cauce desde elv en los extremos
+            chan_slope = None
+            if channel and channel_len_km > 0:
+                def _elv_at(lo, la):
+                    c, r = inv * (lo, la)
+                    ri, ci = int(round(r)), int(round(c))
+                    if 0 <= ri < H and 0 <= ci < W and _np.isfinite(elv_arr[ri, ci]):
+                        return float(elv_arr[ri, ci])
+                    return _np.nan
+                eh = _elv_at(*channel[0]); em = _elv_at(*channel[-1])
+                if _np.isfinite(eh) and _np.isfinite(em):
+                    chan_slope = abs(eh - em) / (channel_len_km * 1000.0)
+            d_outlet = [(_len_lonlat([[boundary[0][0], boundary[0][1]],
+                        [lon, lat]]))]  # placeholder
+            basin_length_km = max(
+                _len_lonlat([[lon, lat], p]) for p in boundary) / 1000.0
+            dd = total_stream_km / area_km2 if area_km2 > 0 else 0.0
+            kc = (0.2821 * perimeter_km / math.sqrt(area_km2)
+                  if area_km2 > 0 else None)
+            rf_ = area_km2 / basin_length_km ** 2 if basin_length_km > 0 else None
+            re = (1.1284 * math.sqrt(area_km2) / basin_length_km
+                  if basin_length_km > 0 else None)
+            tc_h = (0.000325 * (channel_len_km * 1000.0) ** 0.77 /
+                    chan_slope ** 0.385) if chan_slope and chan_slope > 0 else None
+
+            def _r(v, n=3):
+                return round(float(v), n) if v is not None and _np.isfinite(v) else None
+
+            morph = {
+                "area_km2": _r(area_km2, 2),
+                "perimeter_km": _r(perimeter_km, 2),
+                "basin_length_km": _r(basin_length_km, 2),
+                "elev_min_m": _r(e_min, 1), "elev_max_m": _r(e_max, 1),
+                "elev_mean_m": _r(e_mean, 1), "relief_m": _r(relief, 1),
+                "basin_slope_mm": None, "basin_slope_pct": None,
+                "channel_length_km": _r(channel_len_km, 2),
+                "channel_slope_mm": _r(chan_slope, 5),
+                "channel_slope_pct": _r(chan_slope * 100, 3) if chan_slope else None,
+                "sinuosity": None,
+                "total_stream_length_km": _r(total_stream_km, 2),
+                "drainage_density": _r(dd, 3),
+                "n_streams": len(lines_ll),
+                "gravelius_kc": _r(kc, 3),
+                "form_factor_rf": _r(rf_, 4),
+                "elongation_re": _r(re, 3),
+                "tc_kirpich_h": _r(tc_h, 3),
+                "tc_kirpich_min": _r(tc_h * 60.0, 1) if tc_h else None,
+            }
+            touches = bool(catch_arr[0, :].any() or catch_arr[-1, :].any()
+                           or catch_arr[:, 0].any() or catch_arr[:, -1].any())
+            return {
+                "boundary": boundary, "channel": channel,
+                "tributaries": tributaries, "morphometry": morph,
+                "is_real": True, "engine": "MERIT Hydro + pyflwdir",
+                "touches_border": touches,
+            }
+        except Exception as e:
+            _LAST_DELINEATION_ERROR = f"MERIT delineate: {type(e).__name__}: {e}"
+            print(f"delineate_watershed_merit failed: {_LAST_DELINEATION_ERROR}")
+            return None
 
 
 def _delineate_impl(dem, transform, epsg, lat, lon):
@@ -891,7 +1063,7 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
         biggest = max(contours, key=len)
         biggest = measure.approximate_polygon(biggest, tolerance=0.7)
         boundary = _cells_to_lonlat(biggest, step=1)
-        if len(boundary) < 4:
+        if len(boundary) < 3:
             return None
         if boundary[0] != boundary[-1]:
             boundary.append(boundary[0])
@@ -1014,13 +1186,15 @@ def _compute_morphometry(dem, transform, catch_arr, boundary_rc,
         channel_slope = _np.nan
         sinuosity = _np.nan
         if lines_utm and channel_len_m > 0:
+            # Pendiente del cauce: desnivel (cota máx − mín muestreada a lo largo
+            # del cauce) / longitud. Robusto ante nodata en los extremos.
+            elevs = [_elev_at(p) for p in lines_utm[0]]
+            elevs = [e for e in elevs if _np.isfinite(e)]
+            if len(elevs) >= 2:
+                dz = max(elevs) - min(elevs)
+                channel_slope = dz / channel_len_m if channel_len_m > 0 else _np.nan
             head = lines_utm[0][0]
             mouth = lines_utm[0][-1]
-            e_head, e_mouth = _elev_at(head), _elev_at(mouth)
-            # Asegura head = cota mayor, mouth = cota menor
-            if _np.isfinite(e_head) and _np.isfinite(e_mouth):
-                dz = abs(e_head - e_mouth)
-                channel_slope = dz / channel_len_m if channel_len_m > 0 else _np.nan
             straight = float(_np.hypot(mouth[0] - head[0], mouth[1] - head[1]))
             sinuosity = channel_len_m / straight if straight > 0 else _np.nan
 
@@ -1171,6 +1345,31 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
         if best is not None:
             best["truncated"] = bool(best.get("touches_border", False))
         data = best
+
+        # Si el Copernicus falló o quedó truncado/degenerado (zona plana o
+        # cuenca grande, p.ej. Amazonía), se intenta con MERIT Hydro, que está
+        # pre-acondicionado y maneja terreno plano y cuencas extensas.
+        cop_area = (data.get("morphometry") or {}).get("area_km2") or 0.0 if data else 0.0
+        cop_bad = (data is None or data.get("truncated") or cop_area < 1.0)
+        if cop_bad:
+            m_best, m_area = None, -1.0
+            for R in (max(radius_km, 40.0), 80.0, 160.0, 320.0):
+                md = delineate_watershed_merit(lat, lon, radius_km=R)
+                if md is None:
+                    continue
+                md["analysis_radius_km"] = R
+                a = (md.get("morphometry") or {}).get("area_km2") or 0.0
+                if a > m_area:
+                    m_best, m_area = md, a
+                if not md.get("touches_border", False) and a >= 1.0:
+                    break
+            if m_best is not None:
+                m_best["truncated"] = bool(m_best.get("touches_border", False))
+                # Usa MERIT si Copernicus no dio nada, o si MERIT no está
+                # truncado, o si MERIT da una cuenca mayor (más completa).
+                if (data is None or not m_best["truncated"]
+                        or m_area > cop_area):
+                    data = m_best
 
     if data is None:
         data = _synthetic_watershed(lat, lon, radius_km)
