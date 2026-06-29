@@ -781,6 +781,10 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
             dem_clean, transform, catch_arr, big,
             lines_utm, (x_snap, y_snap), nodata=nod)
 
+        # ¿La cuenca toca el borde del DEM? → se extiende más allá de la ventana
+        touches = bool(catch_arr[0, :].any() or catch_arr[-1, :].any()
+                       or catch_arr[:, 0].any() or catch_arr[:, -1].any())
+
         return {
             "boundary": boundary,
             "channel": channel,
@@ -788,6 +792,7 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
             "morphometry": morphometry,
             "is_real": True,
             "engine": "pyflwdir",
+            "touches_border": touches,
         }
     except Exception as e:
         _LAST_DELINEATION_ERROR = f"pyflwdir: {type(e).__name__}: {e}"
@@ -982,11 +987,13 @@ def _compute_morphometry(dem, transform, catch_arr, boundary_rc,
         elev_mean = float(_np.nanmean(dem_m))
         relief = elev_max - elev_min
 
-        # Pendiente media de la cuenca (magnitud del gradiente del DEM)
+        # Pendiente media de la cuenca (magnitud del gradiente del DEM).
+        # Se acota cada celda a 200% (≈63°) para descartar picos espurios del
+        # remuestreo/reproyección, y se usa la mediana (robusta a outliers).
         gy, gx = _np.gradient(_np.where(_np.isnan(dem_m), elev_mean, dem_m),
                               res_y, res_x)
-        slope_grid = _np.hypot(gx, gy)            # m/m
-        basin_slope = float(_np.nanmean(_np.where(catch_arr, slope_grid, _np.nan)))
+        slope_grid = _np.clip(_np.hypot(gx, gy), 0.0, 2.0)   # m/m
+        basin_slope = float(_np.nanmedian(_np.where(catch_arr, slope_grid, _np.nan)))
 
         # Longitud total de cauces y densidad de drenaje
         total_stream_m = sum(_polyline_length(c) for c in lines_utm)
@@ -1127,18 +1134,18 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
     data = None
     if gee_ready():
-        # La cuenca aguas arriba del punto puede ser más grande que la ventana
-        # de análisis. Si a un radio dado la cuenca sale degenerada (área muy
-        # pequeña), se AMPLÍA la ventana (15 → 30 → 60 → 100 km) hasta capturar
-        # una cuenca real. Para cada radio, si la descarga del DEM falla por
-        # tamaño/timeout, se reintenta con una escala más gruesa.
-        MIN_AREA_KM2 = 2.0          # umbral de cuenca "no degenerada"
+        # La cuenca aguas arriba del punto puede exceder la ventana de análisis.
+        # Se AMPLÍA la ventana (15 → 40 → 80 → 160 km) hasta que la cuenca quede
+        # COMPLETAMENTE CONTENIDA (no toca el borde del DEM). Mientras toca el
+        # borde, está truncada (corredor del río) → se amplía. Para cada radio,
+        # si la descarga del DEM falla por tamaño/timeout, se prueba una escala
+        # más gruesa.
         best = None
         best_area = -1.0
-        for R in (radius_km, 30.0, 60.0, 100.0):
+        for R in (radius_km, 40.0, 80.0, 160.0):
             base_scale = max(12.5, (2 * R * 1000.0) / DELINEATION_MAX_DIM)
             scales = []
-            for sc in (base_scale, base_scale * 2, 90.0):
+            for sc in (base_scale, base_scale * 2, 120.0):
                 sc = round(sc, 2)
                 if sc not in scales:
                     scales.append(sc)
@@ -1158,8 +1165,11 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
                 area = (radius_result.get("morphometry") or {}).get("area_km2") or 0.0
                 if area > best_area:
                     best, best_area = radius_result, area
-                if area >= MIN_AREA_KM2:
-                    break   # cuenca razonable: no hace falta ampliar más
+                # Cuenca completa (no truncada) → no hace falta ampliar más
+                if not radius_result.get("touches_border", False) and area >= 0.5:
+                    break
+        if best is not None:
+            best["truncated"] = bool(best.get("touches_border", False))
         data = best
 
     if data is None:
@@ -2555,6 +2565,7 @@ def watershed_status_route():
             "gee_ready": gee_ready(),
             "analysis_radius_km": wd.get("analysis_radius_km") if wd else None,
             "dem_scale_m": wd.get("dem_scale_m") if wd else None,
+            "truncated": bool(wd.get("truncated")) if wd else None,
             "n_boundary_points": len(wd.get("boundary", [])) if wd else 0,
             "n_channel_points": len(wd.get("channel", [])) if wd else 0,
             "n_tributaries": len(wd.get("tributaries", [])) if wd else 0,
@@ -2565,6 +2576,12 @@ def watershed_status_route():
         if not is_real:
             out["nota"] = ("La cuenca es esquemática. Usa /watershed_debug para "
                            "ver el error exacto del DEM / delineación.")
+        elif wd and wd.get("truncated"):
+            out["nota"] = ("La cuenca excede la ventana máxima de análisis "
+                           "(160 km): el punto está sobre un río grande cuya "
+                           "cuenca es muy extensa. Los parámetros son parciales "
+                           "(corredor del río). Para cuencas continentales se "
+                           "requiere hidrografía pre-procesada (HydroSHEDS/MERIT).")
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
