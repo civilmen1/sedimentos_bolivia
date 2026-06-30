@@ -1479,7 +1479,8 @@ def _draw_drainage(ax, watershed_data, zbase=7):
 
 def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                               data_array=None, rgb_image=None,
-                              watershed_data=None):
+                              watershed_data=None,
+                              point_lat=None, point_lon=None):
     """
     Generate a professional cartographic map PNG (base64) with:
     – UTM WGS84 grid at 2500 m
@@ -1490,13 +1491,20 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
 
     Parameters
     ----------
-    lat, lon        : centre of the map (decimal degrees WGS84)
-    map_type        : one of MAP_TITLES keys
-    radius_km       : half-side of the map window (km)
-    data_array      : optional numpy 2-D array; synthetic data used if None
-    rgb_image       : optional numpy RGB(A) array rendered by GEE
-    watershed_data  : dict from get_watershed_overlay(); draws boundary + streams
+    lat, lon            : centre of the map (decimal degrees WGS84)
+    map_type            : one of MAP_TITLES keys
+    radius_km           : half-side of the map window (km)
+    data_array          : optional numpy 2-D array; synthetic data used if None
+    rgb_image           : optional numpy RGB(A) array rendered by GEE
+    watershed_data      : dict from get_watershed_overlay(); draws boundary + streams
+    point_lat, point_lon: posición del punto de muestreo/cierre (estrella); si
+                          es None usa (lat, lon). Permite centrar el mapa en la
+                          cuenca manteniendo la estrella en el punto real.
     """
+    if point_lat is None:
+        point_lat = lat
+    if point_lon is None:
+        point_lon = lon
     plt.rcParams.update({
         'font.family': 'DejaVu Serif',
         'font.size': 9,
@@ -1561,8 +1569,8 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         ax_map.plot([lon, lon], [lat_min + deg_lat*0.05, lat_max - deg_lat*0.05],
                     color='#1a5276', lw=1.2, ls='-', alpha=0.55, zorder=4)
 
-    # Study point
-    ax_map.plot(lon, lat, marker='*', color='red', ms=14, zorder=12,
+    # Study point (punto de cierre real, puede no ser el centro del mapa)
+    ax_map.plot(point_lon, point_lat, marker='*', color='red', ms=14, zorder=12,
                 markeredgecolor='white', markeredgewidth=0.8,
                 label='Punto de muestreo')
 
@@ -1678,7 +1686,7 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     # Coordinate box
     y_pos -= 0.02
     ax_info.axhline(y_pos + 0.04, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
-    ax_info.text(0.5, y_pos, f'Lat: {lat:.5f}°\nLon: {lon:.5f}°',
+    ax_info.text(0.5, y_pos, f'Lat: {point_lat:.5f}°\nLon: {point_lon:.5f}°',
                  ha='center', va='top', fontsize=7, color='#333',
                  transform=ax_info.transAxes,
                  bbox=dict(boxstyle='round,pad=0.3', facecolor='#f9f9f9',
@@ -1694,7 +1702,7 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     # ── Bottom cartouche ──────────────────────────────────────────────────
     fig.text(0.06, 0.005,
              f'Autor: {MAP_AUTHOR}   |   Fecha: {datetime.now().strftime("%d/%m/%Y")}   |   '
-             f'Fuente: {src}   |   Datum: WGS84   |   Coordenadas: Lat {lat:.4f}°, Lon {lon:.4f}°',
+             f'Fuente: {src}   |   Datum: WGS84   |   Coordenadas: Lat {point_lat:.4f}°, Lon {point_lon:.4f}°',
              ha='left', va='bottom', fontsize=6.5, color='#333')
 
     buf = io.BytesIO()
@@ -1714,17 +1722,41 @@ def _cache_key(lat, lon, mt, radius_km):
     return f"{round(lat,5)}|{round(lon,5)}|{mt}|{radius_km}"
 
 
-def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None):
+def _basin_frame(lat, lon, watershed_data, fallback_radius):
+    """
+    Calcula (centro_lat, centro_lon, radio_km) para ENCUADRAR el mapa a la
+    cuenca: bbox del parteaguas + 20% de margen, con un mínimo de 1.5 km para
+    cuencas pequeñas (zoom adecuado). Si no hay cuenca, usa el punto y el radio
+    de respaldo.
+    """
+    b = (watershed_data or {}).get("boundary") or []
+    if len(b) >= 3:
+        lons = [p[0] for p in b]
+        lats = [p[1] for p in b]
+        clat = (min(lats) + max(lats)) / 2.0
+        clon = (min(lons) + max(lons)) / 2.0
+        half_h = (max(lats) - min(lats)) * 111.0 / 2.0
+        half_w = (max(lons) - min(lons)) * 111.0 * math.cos(math.radians(clat)) / 2.0
+        R = max(half_h, half_w) * 1.20
+        R = max(R, 1.5)        # piso de zoom para cuencas pequeñas
+        return clat, clon, R
+    return lat, lon, fallback_radius
+
+
+def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None,
+                           point_lat=None, point_lon=None):
     """
     Genera el mapa de cuenca hidrográfica con fondo satelital y red de drenaje.
-    Es el primer mapa del catálogo temático.
+    (lat, lon) es el CENTRO del encuadre; point_lat/lon es el punto de cierre.
     """
+    pt_lat = lat if point_lat is None else point_lat
+    pt_lon = lon if point_lon is None else point_lon
     key = _cache_key(lat, lon, "watershed", radius_km)
     if key in _MAP_CACHE:
         return _MAP_CACHE[key]
 
     if watershed_data is None:
-        watershed_data = get_watershed_overlay(lat, lon, radius_km)
+        watershed_data = get_watershed_overlay(pt_lat, pt_lon, radius_km)
 
     # Fondo: imagen satelital Sentinel-2 (GEE) o DEM sintético como base
     rgb_bg = None
@@ -1732,17 +1764,16 @@ def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None):
         rgb_bg = fetch_s2_rgb(lat, lon, radius_km=radius_km)
 
     if rgb_bg is None:
-        # Fallback: DEM sintético como fondo topográfico
         dem_arr = _synthetic_data("dem", lat=lat, lon=lon)
         png = generate_cartographic_map(
             lat, lon, "watershed", radius_km=radius_km,
-            data_array=dem_arr, watershed_data=watershed_data
-        )
+            data_array=dem_arr, watershed_data=watershed_data,
+            point_lat=pt_lat, point_lon=pt_lon)
     else:
         png = generate_cartographic_map(
             lat, lon, "watershed", radius_km=radius_km,
-            rgb_image=rgb_bg, watershed_data=watershed_data
-        )
+            rgb_image=rgb_bg, watershed_data=watershed_data,
+            point_lat=pt_lat, point_lon=pt_lon)
 
     if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
         _MAP_CACHE.pop(next(iter(_MAP_CACHE)))
@@ -1751,14 +1782,17 @@ def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None):
 
 
 def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True,
-                          watershed_data=None):
+                          watershed_data=None, point_lat=None, point_lon=None):
     """
-    Generate one cartographic map with watershed overlay.
-    Tries real GEE imagery first, falls back to synthetic data.
-    Result is cached in memory.
+    Genera un mapa temático con overlay de cuenca. (lat, lon) es el centro del
+    encuadre; point_lat/lon es el punto de cierre (estrella).
     """
+    pt_lat = lat if point_lat is None else point_lat
+    pt_lon = lon if point_lon is None else point_lon
     if map_type == "watershed":
-        return generate_watershed_map(lat, lon, radius_km, watershed_data=watershed_data)
+        return generate_watershed_map(lat, lon, radius_km,
+                                      watershed_data=watershed_data,
+                                      point_lat=pt_lat, point_lon=pt_lon)
 
     key = _cache_key(lat, lon, map_type, radius_km)
     if use_cache and key in _MAP_CACHE:
@@ -1770,7 +1804,8 @@ def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True,
 
     png = generate_cartographic_map(lat, lon, map_type,
                                     radius_km=radius_km, rgb_image=rgb,
-                                    watershed_data=watershed_data)
+                                    watershed_data=watershed_data,
+                                    point_lat=pt_lat, point_lon=pt_lon)
 
     if use_cache:
         if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
@@ -1782,20 +1817,19 @@ def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True,
 def generate_all_thematic_maps(lat, lon, radius_km=15.0):
     """
     Retorna dict {map_type: base64_png} para todos los mapas temáticos.
-    El primero es el mapa de cuenca; los siguientes tienen el overlay de cuenca.
-
-    La cuenca puede haberse delimitado en una ventana mayor que `radius_km`
-    (expansión adaptativa). Todos los mapas y el fondo satelital se dibujan con
-    ESE radio real (`analysis_radius_km`) para que la cuenca completa entre en
-    el recuadro (evita el parteaguas como "línea" cruzando el mapa).
+    Encuadra todos los mapas a la BBOX de la cuenca (zoom a la cuenca, con
+    mínimo para cuencas pequeñas), manteniendo la estrella en el punto de cierre.
     """
     wd = get_watershed_overlay(lat, lon, radius_km)
-    R = float(wd.get("analysis_radius_km", radius_km)) if wd else radius_km
-    maps = {"watershed": generate_watershed_map(lat, lon, R, watershed_data=wd)}
+    fallback_R = float(wd.get("analysis_radius_km", radius_km)) if wd else radius_km
+    clat, clon, R = _basin_frame(lat, lon, wd, fallback_R)
+    maps = {"watershed": generate_watershed_map(
+        clat, clon, R, watershed_data=wd, point_lat=lat, point_lon=lon)}
     for mt in list(MAP_TITLES.keys()):
         if mt != "watershed":
-            maps[mt] = generate_thematic_map(lat, lon, mt,
-                                             radius_km=R, watershed_data=wd)
+            maps[mt] = generate_thematic_map(
+                clat, clon, mt, radius_km=R, watershed_data=wd,
+                point_lat=lat, point_lon=lon)
     return maps
 
 
