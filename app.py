@@ -1451,30 +1451,50 @@ def _mask_outside_basin(ax, boundary, lon_min, lon_max, lat_min, lat_max):
     ax.add_patch(patch)
 
 
+def _smooth_polyline(pts, passes=2, closed=False):
+    """Suaviza una polilínea (media móvil 3 puntos) para quitar el escalonado
+    del contorno ráster, sin deformar la geometría."""
+    if not pts or len(pts) < 5:
+        return pts
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    n = len(xs)
+    for _ in range(passes):
+        nx, ny = xs[:], ys[:]
+        for i in range(n):
+            if not closed and (i == 0 or i == n - 1):
+                continue
+            a = (i - 1) % n
+            b = (i + 1) % n
+            nx[i] = (xs[a] + xs[i] + xs[b]) / 3.0
+            ny[i] = (ys[a] + ys[i] + ys[b]) / 3.0
+        xs, ys = nx, ny
+    return list(zip(xs, ys))
+
+
 def _draw_drainage(ax, watershed_data, zbase=7):
-    """Dibuja afluentes (azul fino), cauce principal (azul grueso) y parteaguas."""
+    """Dibuja afluentes (azul fino), cauce principal (azul grueso) y parteaguas,
+    con suavizado para una cartografía limpia."""
     tribs = watershed_data.get("tributaries", []) or []
     for tr in tribs:
         if len(tr) >= 2:
-            xs = [p[0] for p in tr]
-            ys = [p[1] for p in tr]
-            ax.plot(xs, ys, color='#2b7bba', lw=0.9, alpha=0.85,
-                    solid_capstyle='round', zorder=zbase)
+            s = _smooth_polyline(tr, passes=1)
+            ax.plot([p[0] for p in s], [p[1] for p in s], color='#2b7bba',
+                    lw=0.9, alpha=0.85, solid_capstyle='round', zorder=zbase)
 
     channel = watershed_data.get("channel", []) or []
     if len(channel) >= 2:
-        xs = [p[0] for p in channel]
-        ys = [p[1] for p in channel]
-        ax.plot(xs, ys, color='#0b3d91', lw=2.3, alpha=0.95,
-                solid_capstyle='round', zorder=zbase + 1,
-                label='Cauce principal')
+        s = _smooth_polyline(channel, passes=2)
+        ax.plot([p[0] for p in s], [p[1] for p in s], color='#0b3d91',
+                lw=2.3, alpha=0.95, solid_capstyle='round',
+                zorder=zbase + 1, label='Cauce principal')
 
     boundary = watershed_data.get("boundary", []) or []
     if len(boundary) >= 3:
-        bx = [p[0] for p in boundary]
-        by = [p[1] for p in boundary]
-        ax.plot(bx, by, color='#cc0000', lw=2.2, ls='-', alpha=0.95,
-                zorder=zbase + 2, label='Parteaguas')
+        s = _smooth_polyline(boundary, passes=3, closed=True)
+        ax.plot([p[0] for p in s], [p[1] for p in s], color='#cc0000',
+                lw=2.4, ls='-', alpha=0.95, zorder=zbase + 2,
+                label='Parteaguas')
 
 
 def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
@@ -1666,9 +1686,12 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     # Separator
     ax_info.axhline(legend_sep_y, color='#bbb', lw=0.7, xmin=0.0, xmax=1.0)
 
-    # Metadata block
+    # Metadata block (fuente acortada para no desbordar el panel)
+    src_short = src.split(" + ")[0].split("  (")[0].strip()
+    if len(src_short) > 46:
+        src_short = src_short[:44].rstrip() + "…"
     meta = [
-        ('FUENTE:', src),
+        ('FUENTE:', src_short),
         ('PROYECCIÓN:', f'UTM Zona {_latlon_to_utm(lat, lon)[2]}, WGS84'),
         ('ESCALA APROX.:', f'1 : {int(radius_km * 2000 / 14 * 25.4 / 25.4 * 50):,}'),
         ('AUTOR:', MAP_AUTHOR),
@@ -1700,9 +1723,10 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
              ha='center', va='top', fontsize=8, color='#444')
 
     # ── Bottom cartouche ──────────────────────────────────────────────────
+    src_foot = src if len(src) <= 70 else src[:68].rstrip() + "…"
     fig.text(0.06, 0.005,
              f'Autor: {MAP_AUTHOR}   |   Fecha: {datetime.now().strftime("%d/%m/%Y")}   |   '
-             f'Fuente: {src}   |   Datum: WGS84   |   Coordenadas: Lat {point_lat:.4f}°, Lon {point_lon:.4f}°',
+             f'Fuente: {src_foot}   |   Datum: WGS84   |   Lat {point_lat:.4f}°, Lon {point_lon:.4f}°',
              ha='left', va='bottom', fontsize=6.5, color='#333')
 
     buf = io.BytesIO()
