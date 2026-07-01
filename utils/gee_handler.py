@@ -411,6 +411,48 @@ def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=700):
         return None
 
 
+def fetch_hydrobasins_upstream(lat, lon, max_levels=800):
+    """
+    Cuenca de aporte usando HydroSHEDS/HydroBASINS nivel 12 (pre-delimitada
+    global). Toma la sub-cuenca que contiene el punto y agrega, aguas arriba,
+    todas las sub-cuencas conectadas por 'NEXT_DOWN' (traversal iterativo en
+    GEE). Devuelve el polígono disuelto del parteaguas como [[lon,lat],...] o
+    None. Es un respaldo robusto: SIEMPRE da una cuenca real (nunca un punto),
+    aunque su resolución sea regional (~sub-cuencas de decenas–cientos de km²).
+    """
+    if not _GEE_READY:
+        return None
+    try:
+        point = ee.Geometry.Point([lon, lat])
+        basins = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_12")
+        seed = basins.filterBounds(point).first()
+        if seed is None:
+            return None
+        seed_id = ee.Number(seed.get("HYBAS_ID"))
+
+        # Traversal aguas arriba: en cada paso, añade cuencas cuyo NEXT_DOWN
+        # esté en el conjunto actual de IDs.
+        def _step(_, state):
+            state = ee.Dictionary(state)
+            ids = ee.List(state.get("ids"))
+            ups = basins.filter(ee.Filter.inList("NEXT_DOWN", ids))
+            new_ids = ups.aggregate_array("HYBAS_ID")
+            merged = ids.cat(new_ids).distinct()
+            return ee.Dictionary({"ids": merged})
+
+        init = ee.Dictionary({"ids": ee.List([seed_id])})
+        result = ee.Dictionary(
+            ee.List.sequence(1, 12).iterate(_step, init))   # hasta 12 niveles
+        all_ids = ee.List(result.get("ids"))
+        upstream = basins.filter(ee.Filter.inList("HYBAS_ID", all_ids))
+        geom = upstream.union(1).geometry().simplify(maxError=90)
+        info = geom.getInfo()
+        return _extract_polygon_coords(info)
+    except Exception as e:
+        print(f"fetch_hydrobasins_upstream failed: {e}")
+        return None
+
+
 # n de Manning por clase ESA WorldCover (mismo criterio que la capa 'manning')
 _WORLDCOVER_MANNING = {
     10: 0.120, 20: 0.080, 30: 0.050, 40: 0.040, 50: 0.025,
