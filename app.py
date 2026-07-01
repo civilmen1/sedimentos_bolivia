@@ -34,6 +34,7 @@ from utils.gee_handler import (
     fetch_gee_thumbnail,
     fetch_copernicus_dem,
     fetch_merit_hydro,
+    fetch_hydrobasins_upstream,
     fetch_s2_rgb,
     compute_basin_weighted_manning,
     last_dem_error,
@@ -730,7 +731,7 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
 
         # Engancha al cauce principal: prueba radios y se queda con la mayor cuenca
         catch_arr, outlet, best = None, None, -1
-        for snap_r in (800.0, 1500.0, 2500.0, 3500.0, 5000.0):
+        for snap_r in (800.0, 1500.0, 3000.0, 5000.0, 8000.0, 12000.0):
             b, sc = _basin_from(snap_r)
             if b is None:
                 continue
@@ -860,7 +861,7 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
                 return b, (sr, sc), float(upa[sr, sc])
 
             catch_arr, outlet, area_upa, best = None, None, 0.0, -1
-            for sc_cells in (5, 10, 20, 40):
+            for sc_cells in (5, 10, 20, 40, 80, 130):
                 b, oc, a = _basin_from(sc_cells)
                 if b is None:
                     continue
@@ -1035,7 +1036,7 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
         # de ladera). Los radios cubren desde el cauce justo bajo el punto hasta
         # meandros desplazados ~varios km.
         catch_arr, x_snap, y_snap, best = None, x_pt, y_pt, -1
-        for snap_r in (800.0, 1500.0, 2500.0, 3500.0, 5000.0):
+        for snap_r in (800.0, 1500.0, 3000.0, 5000.0, 8000.0, 12000.0):
             ca, xs, ys = _catchment_from_snap(snap_r)
             if ca is None:
                 continue
@@ -1370,6 +1371,20 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
                 if (data is None or not m_best["truncated"]
                         or m_area > cop_area):
                     data = m_best
+
+        # Último respaldo: si la cuenca sigue degenerada (< 3 km²), usar
+        # HydroBASINS (pre-delimitada). SIEMPRE da una cuenca real, no un punto.
+        final_area = (data.get("morphometry") or {}).get("area_km2") or 0.0 if data else 0.0
+        if data is None or final_area < 3.0:
+            hb = fetch_hydrobasins_upstream(lat, lon)
+            if hb and len(hb) >= 4:
+                data = {
+                    "boundary": hb, "channel": [], "tributaries": [],
+                    "morphometry": None, "is_real": True,
+                    "engine": "HydroBASINS (HydroSHEDS v1)",
+                    "touches_border": False, "truncated": False,
+                    "analysis_radius_km": None, "hydrobasins": True,
+                }
 
     if data is None:
         data = _synthetic_watershed(lat, lon, radius_km)
@@ -1761,8 +1776,8 @@ def _basin_frame(lat, lon, watershed_data, fallback_radius):
         clon = (min(lons) + max(lons)) / 2.0
         half_h = (max(lats) - min(lats)) * 111.0 / 2.0
         half_w = (max(lons) - min(lons)) * 111.0 * math.cos(math.radians(clat)) / 2.0
-        R = max(half_h, half_w) * 1.20
-        R = max(R, 1.5)        # piso de zoom para cuencas pequeñas
+        R = max(half_h, half_w) * 1.25
+        R = max(R, 2.5)        # piso de zoom (contexto) para cuencas pequeñas
         return clat, clon, R
     return lat, lon, fallback_radius
 
