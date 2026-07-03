@@ -336,7 +336,7 @@ def fetch_copernicus_dem(lat, lon, radius_km=15.0, scale_m=12.5):
         return None
 
 
-def fetch_merit_hydro(lat, lon, radius_km=40.0, max_dim=2000):
+def fetch_merit_hydro(lat, lon, radius_km=40.0, max_dim=1600):
     """
     Descarga MERIT Hydro (hidrografía global pre-acondicionada, ~90 m): bandas
     'dir' (dirección de flujo D8 ESRI), 'upa' (área acumulada km²) y 'elv'
@@ -356,10 +356,17 @@ def fetch_merit_hydro(lat, lon, radius_km=40.0, max_dim=2000):
         import numpy as np
         from rasterio.io import MemoryFile
 
+        # La dirección de flujo D8 NO admite remuestreo (romper la malla nativa
+        # invalida la topología). Se trabaja SIEMPRE a la escala nativa de MERIT
+        # (~92.77 m) y se recorta el radio para respetar el límite de descarga.
+        scale_m = 92.77
+        max_radius = (max_dim * scale_m) / 2000.0   # km por lado/2
+        radius_km = min(radius_km, max_radius)
         region = _build_region(lat, lon, radius_km)
-        # Escala (m) acotando la malla a max_dim px por lado. Nativo MERIT ~92.77 m.
-        scale_m = max(92.77, (2 * radius_km * 1000.0) / max_dim)
-        img = ee.Image("MERIT/Hydro/v1_0_1").select(["dir", "upa", "elv"])
+        # .toFloat(): 'dir' es entero y 'upa'/'elv' float — GEE rechaza GeoTIFF
+        # multibanda con tipos mezclados ("bands must have compatible types").
+        img = (ee.Image("MERIT/Hydro/v1_0_1")
+               .select(["dir", "upa", "elv"]).toFloat())
         url = img.getDownloadURL({
             "region": region,
             "scale": scale_m,
@@ -375,7 +382,7 @@ def fetch_merit_hydro(lat, lon, radius_km=40.0, max_dim=2000):
 
         with MemoryFile(resp.content) as mf:
             with mf.open() as ds:
-                dir_arr = ds.read(1).astype("int16")
+                dir_arr = np.rint(ds.read(1)).astype("int16")
                 upa_arr = ds.read(2).astype("float64")
                 elv_arr = ds.read(3).astype("float64")
                 transform = ds.transform
@@ -411,27 +418,41 @@ def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=1100):
         return None
 
 
-def fetch_hydrobasins_upstream(lat, lon, max_levels=800):
+def fetch_hydrobasins_upstream(lat, lon, level=7):
     """
-    Cuenca de aporte usando HydroSHEDS/HydroBASINS nivel 12 (pre-delimitada
-    global). Toma la sub-cuenca que contiene el punto y agrega, aguas arriba,
-    todas las sub-cuencas conectadas por 'NEXT_DOWN' (traversal iterativo en
-    GEE). Devuelve el polígono disuelto del parteaguas como [[lon,lat],...] o
-    None. Es un respaldo robusto: SIEMPRE da una cuenca real (nunca un punto),
-    aunque su resolución sea regional (~sub-cuencas de decenas–cientos de km²).
+    Cuenca de aporte con HydroSHEDS/HydroBASINS (vectorial, pre-delimitada
+    global): la herramienta correcta para cuencas GRANDES/internacionales que
+    ningún ráster local puede contener (p.ej. Iténez/Mamoré, >300 000 km²).
+
+    Toma la sub-cuenca `level` que contiene el punto y agrega aguas arriba por
+    'NEXT_DOWN' (traversal iterativo en GEE). Nivel 7 (~sub-cuencas de cientos
+    de km²) mantiene pocas features → la unión de geometrías no expira.
+
+    Retorna dict {'boundary': [[lon,lat],...], 'area_km2': UP_AREA del punto}
+    o None. El área proviene del campo UP_AREA de HydroBASINS nivel 12 (área
+    de drenaje total aguas arriba, exacta e independiente de la ventana).
     """
     if not _GEE_READY:
         return None
     try:
         point = ee.Geometry.Point([lon, lat])
-        basins = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_12")
+
+        # Área de drenaje real en el punto (campo UP_AREA, nivel 12 = preciso)
+        up_area = None
+        try:
+            b12 = ee.FeatureCollection("WWF/HydroSHEDS/v1/Basins/hybas_12")
+            seed12 = b12.filterBounds(point).first()
+            up_area = ee.Number(seed12.get("UP_AREA")).getInfo()
+        except Exception as ae:
+            print(f"UP_AREA lookup failed: {ae}")
+
+        basins = ee.FeatureCollection(
+            f"WWF/HydroSHEDS/v1/Basins/hybas_{level}")
         seed = basins.filterBounds(point).first()
         if seed is None:
             return None
         seed_id = ee.Number(seed.get("HYBAS_ID"))
 
-        # Traversal aguas arriba: en cada paso, añade cuencas cuyo NEXT_DOWN
-        # esté en el conjunto actual de IDs.
         def _step(_, state):
             state = ee.Dictionary(state)
             ids = ee.List(state.get("ids"))
@@ -442,12 +463,15 @@ def fetch_hydrobasins_upstream(lat, lon, max_levels=800):
 
         init = ee.Dictionary({"ids": ee.List([seed_id])})
         result = ee.Dictionary(
-            ee.List.sequence(1, 12).iterate(_step, init))   # hasta 12 niveles
+            ee.List.sequence(1, 25).iterate(_step, init))
         all_ids = ee.List(result.get("ids"))
         upstream = basins.filter(ee.Filter.inList("HYBAS_ID", all_ids))
-        geom = upstream.union(1).geometry().simplify(maxError=90)
+        geom = upstream.union(500).geometry().simplify(maxError=500)
         info = geom.getInfo()
-        return _extract_polygon_coords(info)
+        boundary = _extract_polygon_coords(info)
+        if not boundary or len(boundary) < 4:
+            return None
+        return {"boundary": boundary, "area_km2": up_area}
     except Exception as e:
         print(f"fetch_hydrobasins_upstream failed: {e}")
         return None
