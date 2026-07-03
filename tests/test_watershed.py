@@ -167,5 +167,18 @@ def test_watershed_model_inputs_fallback(monkeypatch):
     assert "usuario" in wmi["slope_source"]
 
 
+def test_boundary_closed_even_touching_border():
+    """
+    Regresión: cuando la cuenca toca el borde del ráster, el parteaguas debe
+    ser un polígono CERRADO, no una polilínea abierta (el bug de la "raya").
+    """
+    m = np.zeros((100, 100), dtype=bool)
+    m[50:, 20:90] = True          # toca el borde inferior
+    b = app_module._basin_boundary_px(m)
+    assert b is not None and len(b) >= 4
+    assert abs(b[0][0] - b[-1][0]) < 1e-6
+    assert abs(b[0][1] - b[-1][1]) < 1e-6
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
