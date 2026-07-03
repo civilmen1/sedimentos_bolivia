@@ -1309,68 +1309,82 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
     data = None
     if gee_ready():
-        # La cuenca aguas arriba del punto puede exceder la ventana de análisis.
-        # Se AMPLÍA la ventana (15 → 40 → 80 → 160 km) hasta que la cuenca quede
-        # COMPLETAMENTE CONTENIDA (no toca el borde del DEM). Mientras toca el
-        # borde, está truncada (corredor del río) → se amplía. Para cada radio,
-        # si la descarga del DEM falla por tamaño/timeout, se prueba una escala
-        # más gruesa.
-        best = None
-        best_area = -1.0
-        for R in (radius_km, 40.0, 80.0, 160.0):
-            base_scale = max(12.5, (2 * R * 1000.0) / DELINEATION_MAX_DIM)
-            scales = []
-            for sc in (base_scale, base_scale * 2, 120.0):
-                sc = round(sc, 2)
-                if sc not in scales:
-                    scales.append(sc)
-            radius_result = None
-            for sc in scales:
-                dem_pack = fetch_copernicus_dem(lat, lon, R, scale_m=sc)
-                if dem_pack is None:
-                    continue
-                dem, transform, epsg, _extent = dem_pack
-                d = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
-                if d is not None:
-                    d["dem_scale_m"] = round(sc, 1)
-                    d["analysis_radius_km"] = R
-                    radius_result = d
-                    break
-            if radius_result is not None:
-                area = (radius_result.get("morphometry") or {}).get("area_km2") or 0.0
-                if area > best_area:
-                    best, best_area = radius_result, area
-                # Cuenca completa (no truncada) → no hace falta ampliar más
-                if not radius_result.get("touches_border", False) and area >= 0.5:
-                    break
-        if best is not None:
-            best["truncated"] = bool(best.get("touches_border", False))
-        data = best
+        def _area_of(d):
+            return ((d or {}).get("morphometry") or {}).get("area_km2") or 0.0
 
-        # Si el Copernicus falló o quedó truncado/degenerado (zona plana o
-        # cuenca grande, p.ej. Amazonía), se intenta con MERIT Hydro, que está
-        # pre-acondicionado y maneja terreno plano y cuencas extensas.
-        cop_area = (data.get("morphometry") or {}).get("area_km2") or 0.0 if data else 0.0
-        cop_bad = (data is None or data.get("truncated") or cop_area < 1.0)
-        if cop_bad:
-            m_best, m_area = None, -1.0
-            for R in (max(radius_km, 40.0), 80.0, 160.0, 320.0):
-                md = delineate_watershed_merit(lat, lon, radius_km=R)
-                if md is None:
-                    continue
-                md["analysis_radius_km"] = R
-                a = (md.get("morphometry") or {}).get("area_km2") or 0.0
-                if a > m_area:
-                    m_best, m_area = md, a
-                if not md.get("touches_border", False) and a >= 1.0:
-                    break
-            if m_best is not None:
-                m_best["truncated"] = bool(m_best.get("touches_border", False))
-                # Usa MERIT si Copernicus no dio nada, o si MERIT no está
-                # truncado, o si MERIT da una cuenca mayor (más completa).
-                if (data is None or not m_best["truncated"]
-                        or m_area > cop_area):
-                    data = m_best
+        # ── MOTOR PRIMARIO: MERIT Hydro ─────────────────────────────────────
+        # Hidrografía global PRE-ACONDICIONADA (dirección de flujo y área
+        # acumulada ya resueltas): funciona igual en montaña, valle y llanura
+        # amazónica, donde el geoproceso sobre DEM crudo falla. La ventana se
+        # amplía hasta contener la cuenca completa.
+        merit, merit_area = None, -1.0
+        for R in (max(radius_km, 40.0), 80.0, 160.0, 320.0):
+            md = delineate_watershed_merit(lat, lon, radius_km=R)
+            if md is None:
+                continue
+            md["analysis_radius_km"] = R
+            a = _area_of(md)
+            if a > merit_area:
+                merit, merit_area = md, a
+            if not md.get("touches_border", False) and a >= 1.0:
+                break
+        if merit is not None:
+            merit["truncated"] = bool(merit.get("touches_border", False))
+        data = merit
+
+        # ── REFINAMIENTO: Copernicus 12.5 m para cuencas pequeñas/medianas ──
+        # MERIT es de 90 m; si la cuenca es < 300 km², vale la pena refinarla
+        # con el DEM de alta resolución. Solo se acepta el refinamiento si es
+        # consistente con MERIT (no truncado y área comparable), para no volver
+        # a caer en microcuencas de ladera.
+        if merit is None or (0 < merit_area < 300.0):
+            cop, cop_area = None, -1.0
+            for R in (radius_km, 40.0, 80.0):
+                base_scale = max(12.5, (2 * R * 1000.0) / DELINEATION_MAX_DIM)
+                scales = []
+                for sc in (base_scale, base_scale * 2, 120.0):
+                    sc = round(sc, 2)
+                    if sc not in scales:
+                        scales.append(sc)
+                rr = None
+                for sc in scales:
+                    dem_pack = fetch_copernicus_dem(lat, lon, R, scale_m=sc)
+                    if dem_pack is None:
+                        continue
+                    dem, transform, epsg, _extent = dem_pack
+                    d = delineate_watershed_from_dem(dem, transform, epsg, lat, lon)
+                    if d is not None:
+                        d["dem_scale_m"] = round(sc, 1)
+                        d["analysis_radius_km"] = R
+                        rr = d
+                        break
+                if rr is not None:
+                    a = _area_of(rr)
+                    if a > cop_area:
+                        cop, cop_area = rr, a
+                    if not rr.get("touches_border", False) and a >= 0.5:
+                        break
+            if cop is not None:
+                cop["truncated"] = bool(cop.get("touches_border", False))
+                consistent = (merit is None or
+                              (not cop["truncated"]
+                               and cop_area >= 0.4 * merit_area))
+                if consistent and cop_area > 0.5:
+                    data = cop
+                elif data is None:
+                    data = cop
+
+        # ── ÚLTIMO RESPALDO: HydroBASINS (pre-delimitada, nunca un punto) ───
+        if data is None or _area_of(data) < 3.0:
+            hb = fetch_hydrobasins_upstream(lat, lon)
+            if hb and len(hb) >= 4:
+                data = {
+                    "boundary": hb, "channel": [], "tributaries": [],
+                    "morphometry": None, "is_real": True,
+                    "engine": "HydroBASINS (HydroSHEDS v1)",
+                    "touches_border": False, "truncated": False,
+                    "analysis_radius_km": None, "hydrobasins": True,
+                }
 
         # Último respaldo: si la cuenca sigue degenerada (< 3 km²), usar
         # HydroBASINS (pre-delimitada). SIEMPRE da una cuenca real, no un punto.
@@ -1515,7 +1529,8 @@ def _draw_drainage(ax, watershed_data, zbase=7):
 def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
                               data_array=None, rgb_image=None,
                               watershed_data=None,
-                              point_lat=None, point_lon=None):
+                              point_lat=None, point_lon=None,
+                              vrange=None):
     """
     Generate a professional cartographic map PNG (base64) with:
     – UTM WGS84 grid at 2500 m
@@ -1640,7 +1655,9 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     show_cb = not (map_type == "watershed" and is_real)
     if show_cb:
         if is_real:
-            norm = Normalize(vmin=meta['vmin'], vmax=meta['vmax'])
+            _vmin = vrange[0] if vrange else meta['vmin']
+            _vmax = vrange[1] if vrange else meta['vmax']
+            norm = Normalize(vmin=_vmin, vmax=_vmax)
             sm = ScalarMappable(norm=norm, cmap=cmap)
             sm.set_array([])
             cb = fig.colorbar(sm, cax=ax_cb)
@@ -1837,14 +1854,18 @@ def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True,
     if use_cache and key in _MAP_CACHE:
         return _MAP_CACHE[key]
 
-    rgb = None
+    rgb, vrange = None, None
     if gee_ready():
-        rgb = fetch_gee_thumbnail(map_type, lat, lon, radius_km=radius_km)
+        thumb = fetch_gee_thumbnail(map_type, lat, lon, radius_km=radius_km)
+        if thumb is not None:
+            rgb, vmin_d, vmax_d = thumb
+            vrange = (vmin_d, vmax_d)
 
     png = generate_cartographic_map(lat, lon, map_type,
                                     radius_km=radius_km, rgb_image=rgb,
                                     watershed_data=watershed_data,
-                                    point_lat=pt_lat, point_lon=pt_lon)
+                                    point_lat=pt_lat, point_lon=pt_lon,
+                                    vrange=vrange)
 
     if use_cache:
         if len(_MAP_CACHE) >= _MAP_CACHE_MAX:

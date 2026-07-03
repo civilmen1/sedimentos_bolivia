@@ -390,7 +390,7 @@ def fetch_merit_hydro(lat, lon, radius_km=40.0, max_dim=2000):
         return None
 
 
-def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=700):
+def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=1100):
     """Fondo satelital Sentinel-2 color verdadero (B4-B3-B2) como array RGB."""
     if not _GEE_READY:
         return None
@@ -598,11 +598,19 @@ def fetch_watershed_data(lat, lon, radius_km=15.0):
         return None
 
 
-def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=700):
+# Capas con rango dependiente del terreno: se estira la paleta a los
+# percentiles 2–98 de la REGIÓN (si no, p.ej. el DEM amazónico a ~140 m queda
+# clampeado en un solo color con el rango fijo andino 1500–5500 m).
+_DYNAMIC_STRETCH = {"dem", "slope"}
+
+
+def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
     """
-    Obtiene la imagen renderizada real desde GEE (getThumbURL) y la devuelve
-    como array numpy RGB(A) float [0..1]. Devuelve None si GEE no está
-    disponible o falla la petición.
+    Obtiene la imagen renderizada real desde GEE (getThumbURL).
+
+    Retorna (arr, vmin, vmax): array numpy RGB(A) float [0..1] y el rango de
+    valores realmente usado para la paleta (dinámico para dem/slope, fijo para
+    el resto). Devuelve None si GEE no está disponible o falla la petición.
     """
     if not _GEE_READY:
         return None
@@ -613,8 +621,24 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=700):
         region = _build_region(lat, lon, radius_km)
         meta = LAYER_META[map_type]
         img = _layer_image(map_type, region)
-        vis = img.visualize(min=meta["vmin"], max=meta["vmax"],
-                            palette=meta["palette"])
+
+        vmin, vmax = meta["vmin"], meta["vmax"]
+        if map_type in _DYNAMIC_STRETCH:
+            try:
+                stats = img.reduceRegion(
+                    reducer=ee.Reducer.percentile([2, 98]),
+                    geometry=region, scale=150,
+                    maxPixels=1e9, bestEffort=True,
+                ).getInfo() or {}
+                vals = [v for v in stats.values() if v is not None]
+                if len(vals) >= 2:
+                    lo, hi = min(vals), max(vals)
+                    if hi - lo > 1e-6:
+                        vmin, vmax = float(lo), float(hi)
+            except Exception as se:
+                print(f"dynamic stretch failed for '{map_type}': {se}")
+
+        vis = img.visualize(min=vmin, max=vmax, palette=meta["palette"])
         url = vis.getThumbURL({
             "region": region,
             "dimensions": dimensions,
@@ -623,7 +647,7 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=700):
         resp = requests.get(url, timeout=90)
         resp.raise_for_status()
         arr = mpimg.imread(io.BytesIO(resp.content))
-        return arr
+        return arr, vmin, vmax
     except Exception as e:
         print(f"GEE thumbnail fetch failed for '{map_type}': {e}")
         return None
