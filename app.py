@@ -1347,10 +1347,10 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
         # ── MOTOR PRIMARIO: MERIT Hydro ─────────────────────────────────────
         # Hidrografía global PRE-ACONDICIONADA (dirección de flujo y área
         # acumulada ya resueltas): funciona igual en montaña, valle y llanura
-        # amazónica, donde el geoproceso sobre DEM crudo falla. La ventana se
-        # amplía hasta contener la cuenca completa.
+        # amazónica, donde el geoproceso sobre DEM crudo falla. Radios acotados
+        # a la escala NATIVA de MERIT (~93 m): remuestrear 'dir' rompe el D8.
         merit, merit_area = None, -1.0
-        for R in (max(radius_km, 40.0), 80.0, 160.0, 320.0):
+        for R in (min(max(radius_km, 40.0), 74.0), 74.0):
             md = delineate_watershed_merit(lat, lon, radius_km=R)
             if md is None:
                 continue
@@ -1398,24 +1398,53 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
                         break
             if cop is not None:
                 cop["truncated"] = bool(cop.get("touches_border", False))
-                consistent = (merit is None or
-                              (not cop["truncated"]
-                               and cop_area >= 0.4 * merit_area))
-                if consistent and cop_area > 0.5:
-                    data = cop
-                elif data is None:
-                    data = cop
+                if merit is None:
+                    # Sin referencia MERIT: solo aceptar Copernicus si dio una
+                    # cuenca sustancial — evita la "microcuenca punto rojo".
+                    if not cop["truncated"] and cop_area >= 5.0:
+                        data = cop
+                else:
+                    consistent = (not cop["truncated"]
+                                  and cop_area >= 0.4 * merit_area)
+                    if consistent and cop_area > 0.5:
+                        data = cop
 
-        # ── ÚLTIMO RESPALDO: HydroBASINS (pre-delimitada, nunca un punto) ───
-        if data is None or _area_of(data) < 3.0:
+        # ── MEGA-CUENCAS / RESPALDO: HydroBASINS (vectorial global) ─────────
+        # Si la cuenca excede la ventana máxima de MERIT (truncada) o quedó
+        # degenerada, la herramienta correcta es HydroBASINS: polígono completo
+        # aunque la cuenca sea internacional (p.ej. Iténez/Mamoré ~300 000 km²)
+        # y área REAL del campo UP_AREA. Se conservan cauce/tramo y elevaciones
+        # de MERIT (válidos localmente) si existen.
+        if data is None or _area_of(data) < 3.0 or data.get("truncated"):
             hb = fetch_hydrobasins_upstream(lat, lon)
-            if hb and len(hb) >= 4:
+            if hb and hb.get("boundary"):
+                base = data if (data and data.get("engine", "").startswith("MERIT")) else merit
+                morph = dict((base or {}).get("morphometry") or {})
+                if hb.get("area_km2"):
+                    morph["area_km2"] = round(float(hb["area_km2"]), 1)
+                    # Recalcula índices de forma con el polígono completo
+                    per_km = _len_lonlat(hb["boundary"]) / 1000.0
+                    morph["perimeter_km"] = round(per_km, 1)
+                    blen = max(_len_lonlat([[lon, lat], p])
+                               for p in hb["boundary"]) / 1000.0
+                    morph["basin_length_km"] = round(blen, 1)
+                    a_km2 = morph["area_km2"]
+                    morph["gravelius_kc"] = round(
+                        0.2821 * per_km / math.sqrt(a_km2), 3) if a_km2 > 0 else None
+                    morph["form_factor_rf"] = round(
+                        a_km2 / blen ** 2, 4) if blen > 0 else None
+                    morph["elongation_re"] = round(
+                        1.1284 * math.sqrt(a_km2) / blen, 3) if blen > 0 else None
                 data = {
-                    "boundary": hb, "channel": [], "tributaries": [],
-                    "morphometry": None, "is_real": True,
-                    "engine": "HydroBASINS (HydroSHEDS v1)",
+                    "boundary": hb["boundary"],
+                    "channel": (base or {}).get("channel", []),
+                    "tributaries": (base or {}).get("tributaries", []),
+                    "morphometry": morph or None,
+                    "is_real": True,
+                    "engine": "HydroBASINS + MERIT Hydro",
                     "touches_border": False, "truncated": False,
-                    "analysis_radius_km": None, "hydrobasins": True,
+                    "analysis_radius_km": (base or {}).get("analysis_radius_km"),
+                    "hydrobasins": True,
                 }
 
     if data is None:
@@ -2874,6 +2903,7 @@ def watershed_status_route():
                            else "esquemática (sintética)",
             "is_real": is_real,
             "gee_ready": gee_ready(),
+            "engine": wd.get("engine") if wd else None,
             "analysis_radius_km": wd.get("analysis_radius_km") if wd else None,
             "dem_scale_m": wd.get("dem_scale_m") if wd else None,
             "truncated": bool(wd.get("truncated")) if wd else None,
