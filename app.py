@@ -685,6 +685,28 @@ def delineate_watershed_from_dem(dem, transform, epsg, lat, lon):
         return _delineate_impl(dem, transform, epsg, lat, lon)
 
 
+def _basin_boundary_px(catch_arr, tolerance=0.7):
+    """
+    Contorno CERRADO del parteaguas en coordenadas de píxel (fila, col).
+
+    Clave: la máscara se rellena con un borde de ceros antes de find_contours.
+    Sin esto, cuando la cuenca toca el borde del ráster skimage devuelve un
+    contorno ABIERTO (no lo cierra por el borde) y el parteaguas se dibujaba
+    como una raya en vez de un polígono.
+    """
+    import numpy as _np
+    from skimage import measure
+    padded = _np.pad(catch_arr.astype(float), 1, mode="constant",
+                     constant_values=0.0)
+    contours = measure.find_contours(padded, 0.5)
+    if not contours:
+        return None
+    big = measure.approximate_polygon(max(contours, key=len),
+                                      tolerance=tolerance)
+    # Deshace el padding (resta 1) y recorta al ráster original
+    return [(float(r) - 1.0, float(c) - 1.0) for r, c in big]
+
+
 def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
     """Delineación con pyflwdir (motor principal). Devuelve None si falla."""
     global _LAST_DELINEATION_ERROR
@@ -729,7 +751,11 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
             b = _np.asarray(flw.basins(idxs=_np.array([sr * W + sc]))) > 0
             return b, (sr, sc)
 
-        # Engancha al cauce principal: prueba radios y se queda con la mayor cuenca
+        # Engancha al cauce significativo MÁS CERCANO: radios ascendentes con
+        # parada temprana en cuanto la cuenca supera un área mínima razonable.
+        # (Quedarse siempre con la mayor saltaba al río gigante a 12 km en vez
+        # de a la quebrada de interés junto al punto.)
+        MIN_OK_CELLS = max(30, int(5.0e6 / (res_m * res_m)))   # ≈ 5 km²
         catch_arr, outlet, best = None, None, -1
         for snap_r in (800.0, 1500.0, 3000.0, 5000.0, 8000.0, 12000.0):
             b, sc = _basin_from(snap_r)
@@ -738,17 +764,19 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
             nb = int(b.sum())
             if nb > best:
                 best, catch_arr, outlet = nb, b, sc
+            if nb >= MIN_OK_CELLS:
+                catch_arr, outlet = b, sc
+                break
         if catch_arr is None or int(catch_arr.sum()) < 30:
             return None
 
         sr, sc = outlet
         x_snap, y_snap = transform * (sc + 0.5, sr + 0.5)
 
-        # Parteaguas (contorno mayor de la máscara de cuenca)
-        contours = measure.find_contours(catch_arr.astype(float), 0.5)
-        if not contours:
+        # Parteaguas (contorno CERRADO, robusto en bordes)
+        big = _basin_boundary_px(catch_arr)
+        if big is None:
             return None
-        big = measure.approximate_polygon(max(contours, key=len), tolerance=0.7)
         boundary = []
         for r, c in big:
             x, y = transform * (c, r)
@@ -860,6 +888,10 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
                 b = _np.asarray(flw.basins(idxs=_np.array([sr * W + sc]))) > 0
                 return b, (sr, sc), float(upa[sr, sc])
 
+            # Radios ascendentes con parada temprana: engancha a la quebrada o
+            # río significativo (≥ 5 km² según 'upa') MÁS CERCANO al punto, no
+            # al río gigante más lejano dentro de la ventana de búsqueda.
+            MIN_OK_KM2 = 5.0
             catch_arr, outlet, area_upa, best = None, None, 0.0, -1
             for sc_cells in (5, 10, 20, 40, 80, 130):
                 b, oc, a = _basin_from(sc_cells)
@@ -867,17 +899,19 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
                     continue
                 if int(b.sum()) > best:
                     best, catch_arr, outlet, area_upa = int(b.sum()), b, oc, a
+                if a >= MIN_OK_KM2:
+                    catch_arr, outlet, area_upa = b, oc, a
+                    break
             if catch_arr is None or int(catch_arr.sum()) < 10:
                 return None
 
             sr, sc = outlet
             to_ll = lambda c, r: (transform * (c, r))   # 4326 → (lon,lat)
 
-            # Parteaguas
-            contours = measure.find_contours(catch_arr.astype(float), 0.5)
-            if not contours:
+            # Parteaguas (contorno CERRADO, robusto en bordes)
+            big = _basin_boundary_px(catch_arr)
+            if big is None:
                 return None
-            big = measure.approximate_polygon(max(contours, key=len), 0.7)
             boundary = [[float(x), float(y)]
                         for x, y in (to_ll(c, r) for r, c in big)]
             if len(boundary) < 3:
@@ -1057,12 +1091,10 @@ def _delineate_impl(dem, transform, epsg, lat, lon):
                 out.append([float(lo), float(la)])
             return out
 
-        # Parteaguas: contorno mayor de la máscara de cuenca
-        contours = measure.find_contours(catch_arr.astype(float), 0.5)
-        if not contours:
+        # Parteaguas: contorno CERRADO (robusto cuando toca el borde del ráster)
+        biggest = _basin_boundary_px(catch_arr)
+        if biggest is None:
             return None
-        biggest = max(contours, key=len)
-        biggest = measure.approximate_polygon(biggest, tolerance=0.7)
         boundary = _cells_to_lonlat(biggest, step=1)
         if len(boundary) < 3:
             return None
@@ -1376,20 +1408,6 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
         # ── ÚLTIMO RESPALDO: HydroBASINS (pre-delimitada, nunca un punto) ───
         if data is None or _area_of(data) < 3.0:
-            hb = fetch_hydrobasins_upstream(lat, lon)
-            if hb and len(hb) >= 4:
-                data = {
-                    "boundary": hb, "channel": [], "tributaries": [],
-                    "morphometry": None, "is_real": True,
-                    "engine": "HydroBASINS (HydroSHEDS v1)",
-                    "touches_border": False, "truncated": False,
-                    "analysis_radius_km": None, "hydrobasins": True,
-                }
-
-        # Último respaldo: si la cuenca sigue degenerada (< 3 km²), usar
-        # HydroBASINS (pre-delimitada). SIEMPRE da una cuenca real, no un punto.
-        final_area = (data.get("morphometry") or {}).get("area_km2") or 0.0 if data else 0.0
-        if data is None or final_area < 3.0:
             hb = fetch_hydrobasins_upstream(lat, lon)
             if hb and len(hb) >= 4:
                 data = {
