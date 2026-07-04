@@ -35,6 +35,7 @@ from utils.gee_handler import (
     fetch_copernicus_dem,
     fetch_merit_hydro,
     fetch_hydrobasins_upstream,
+    fetch_rivers_hydrosheds,
     fetch_s2_rgb,
     compute_basin_weighted_manning,
     last_dem_error,
@@ -53,7 +54,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v35-indices-multifuente"
+APP_VERSION = "v36-escala-modis-rios"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -1452,13 +1453,24 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
                         a_km2 / blen ** 2, 4) if blen > 0 else None
                     morph["elongation_re"] = round(
                         1.1284 * math.sqrt(a_km2) / blen, 3) if blen > 0 else None
+                # Red de drenaje de TODA la mega-cuenca: ríos vectoriales
+                # HydroSHEDS (la red MERIT solo cubre la ventana de ~74 km
+                # junto a la salida — por eso se veía incompleta).
+                channel = (base or {}).get("channel", [])
+                tributaries = (base or {}).get("tributaries", [])
+                rivers = fetch_rivers_hydrosheds(hb["boundary"],
+                                                 max_order=6, max_feats=400)
+                if rivers:
+                    channel = [[float(x), float(y)] for x, y in rivers[0]]
+                    tributaries = [[[float(x), float(y)] for x, y in ln]
+                                   for ln in rivers[1:200]]
                 data = {
                     "boundary": hb["boundary"],
-                    "channel": (base or {}).get("channel", []),
-                    "tributaries": (base or {}).get("tributaries", []),
+                    "channel": channel,
+                    "tributaries": tributaries,
                     "morphometry": morph or None,
                     "is_real": True,
-                    "engine": "HydroBASINS + MERIT Hydro",
+                    "engine": "HydroBASINS + HydroSHEDS Rivers + MERIT",
                     "touches_border": False, "truncated": False,
                     "analysis_radius_km": (base or {}).get("analysis_radius_km"),
                     "hydrobasins": True,
