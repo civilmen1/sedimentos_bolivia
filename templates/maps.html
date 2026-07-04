@@ -239,6 +239,7 @@ body {
     <p>⚠ <strong>Modo demostración:</strong> Los mapas muestran datos sintéticos. Para obtener imágenes satelitales reales, configure la clave JSON de la cuenta de servicio de Google Earth Engine como variable de entorno <code>EE_SERVICE_ACCOUNT_JSON</code> del servidor.</p>
     {% endif %}
     <p class="dl-hint">Haz clic derecho sobre cualquier mapa → "Guardar imagen como" para descargar en PNG de alta resolución (130 dpi).</p>
+    <p class="dl-hint">Build: {{ app_version | default('—') }} &ensp;·&ensp; añade <code>&refresh=1</code> a la URL para regenerar los mapas sin caché.</p>
   </div>
 </div>
 
