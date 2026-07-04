@@ -176,27 +176,36 @@ def _l89_col(region):
             .map(_mask))
 
 
-def _ndvi_multisource(region):
+def _index_multisource(region, s2_pair, l89_pair, name):
     """
-    NDVI multi-fuente: Sentinel-2 (B8,B4; máscara SCL) + Landsat 8/9 C2 L2
-    (SR_B5,SR_B4 con factores de escala; máscara QA_PIXEL), mediana 2020–2024.
-    Combinar sensores da una mediana más poblada y estable (menos huecos por
-    nubes) — mismo criterio que los ejemplos de cuenca en el Code Editor de GEE.
+    Índice normalizado (A−B)/(A+B) multi-fuente: Sentinel-2 (máscara SCL) +
+    Landsat 8/9 C2 L2 (reflectancia = DN×0.0000275−0.2; máscara QA_PIXEL),
+    mediana 2020–2024. Dos constelaciones → mediana más poblada y estable
+    (menos huecos por nubes), valores físicamente reales.
+
+    Mapeo de bandas (fórmulas estándar):
+      NDVI (Rouse 1974):    S2 (B8,B4)  | L8/9 (SR_B5,SR_B4)  = (NIR−Rojo)
+      NDWI (McFeeters 1996):S2 (B3,B8)  | L8/9 (SR_B3,SR_B5)  = (Verde−NIR)
+      NDTI (Lacaux 2007):   S2 (B4,B3)  | L8/9 (SR_B4,SR_B3)  = (Rojo−Verde)
     """
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
           .filterBounds(region)
           .filterDate("2020-01-01", "2024-12-31")
           .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
           .map(_mask_s2_clouds)
-          .map(lambda i: i.normalizedDifference(["B8", "B4"]).rename("NDVI")))
+          .map(lambda i: i.normalizedDifference(list(s2_pair)).rename(name)))
 
-    def _l_ndvi(img):
-        nir = img.select("SR_B5").multiply(0.0000275).add(-0.2)
-        red = img.select("SR_B4").multiply(0.0000275).add(-0.2)
-        return nir.subtract(red).divide(nir.add(red)).rename("NDVI")
+    def _l_index(img):
+        a = img.select(l89_pair[0]).multiply(0.0000275).add(-0.2)
+        b = img.select(l89_pair[1]).multiply(0.0000275).add(-0.2)
+        return a.subtract(b).divide(a.add(b)).rename(name)
 
-    l89 = _l89_col(region).map(_l_ndvi)
+    l89 = _l89_col(region).map(_l_index)
     return s2.merge(l89).median().clip(region)
+
+
+def _ndvi_multisource(region):
+    return _index_multisource(region, ("B8", "B4"), ("SR_B5", "SR_B4"), "NDVI")
 
 
 # Paletas y rangos por capa (también usadas para construir la leyenda)
@@ -225,14 +234,14 @@ LAYER_META = {
     "ndwi": {
         "vmin": -0.5, "vmax": 0.5,
         "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
-        "source": "Sentinel-2 L2A / ESA — 10 m | Mediana 2020–2023",
+        "source": "Sentinel-2 L2A + Landsat 8/9 C2 — mediana 2020–2024, nubes enmascaradas",
         "title": "Índice de Agua Normalizado (NDWI)",
         "legend": "NDWI (−1 a +1)",
     },
     "ndti": {
         "vmin": -0.3, "vmax": 0.45,
         "palette": ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#cc4c02"],
-        "source": "Sentinel-2 L2A / ESA — 10 m | Mediana 2020–2023",
+        "source": "Sentinel-2 L2A + Landsat 8/9 C2 — mediana 2020–2024, nubes enmascaradas",
         "title": "Índice de Turbidez Normalizado (NDTI)",
         "legend": "NDTI (−1 a +1)",
     },
@@ -277,13 +286,16 @@ def _layer_image(map_type, region):
         return ee.Terrain.slope(dem).clip(region)
 
     if map_type == "ndvi":
-        return _ndvi_multisource(region)
+        return _index_multisource(region, ("B8", "B4"),
+                                  ("SR_B5", "SR_B4"), "NDVI")
 
     if map_type == "ndwi":
-        return _s2_median(region).normalizedDifference(["B3", "B8"]).clip(region)
+        return _index_multisource(region, ("B3", "B8"),
+                                  ("SR_B3", "SR_B5"), "NDWI")
 
     if map_type == "ndti":
-        return _s2_median(region).normalizedDifference(["B4", "B3"]).clip(region)
+        return _index_multisource(region, ("B4", "B3"),
+                                  ("SR_B4", "SR_B3"), "NDTI")
 
     if map_type == "manning":
         lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(region)
