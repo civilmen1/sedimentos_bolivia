@@ -50,6 +50,10 @@ from matplotlib.cm import ScalarMappable
 
 app = Flask(__name__)
 app.jinja_env.globals['enumerate'] = enumerate
+
+# Versión visible del build — permite verificar qué código corre el Space
+# (aparece en /gee_status, /watershed_status y el pie de /maps).
+APP_VERSION = "v34-red-drenaje-cap"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -795,7 +799,10 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
         try:
             basin_cells = int(catch_arr.sum())
             cells_025km2 = 0.25e6 / (res_m * res_m)
-            thr = max(basin_cells * 0.01, cells_025km2)
+            cells_50km2 = 50.0e6 / (res_m * res_m)
+            # 1% del área de cuenca, acotado a [0.25, 50] km²: sin el tope,
+            # en mega-cuencas el umbral crecía tanto que borraba la red.
+            thr = min(max(basin_cells * 0.01, cells_025km2), cells_50km2)
             mask = catch_arr & (uparea > thr)
             feats = flw.streams(mask=mask)
             lines_utm = [f['geometry']['coordinates'] for f in feats
@@ -929,7 +936,10 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
             # máxima: así la red sale completa también en cuencas grandes.
             channel, tributaries, lines_ll = [], [], []
             try:
-                thr = max(area_upa * 0.01, 0.25)
+                # 1% del área, acotado a [0.25, 50] km²: sin el tope, en
+                # mega-cuencas (Mamoré ~590 000 km²) el umbral era 5 900 km²
+                # y borraba la red de drenaje en vez de completarla.
+                thr = min(max(area_upa * 0.01, 0.25), 50.0)
                 mask = catch_arr & (upa > thr)
                 feats = flw.streams(mask=mask)
                 lines_ll = [f['geometry']['coordinates'] for f in feats
@@ -2844,6 +2854,11 @@ def maps_view():
         lon  = float(request.args.get("lon",  -68.15))
         d50  = float(request.args.get("d50",  0.45))
         d90  = float(request.args.get("d90",  0.9))
+        # ?refresh=1 fuerza la regeneración completa (vacía cachés en memoria)
+        if request.args.get("refresh", "0") in ("1", "true", "yes"):
+            _MAP_CACHE.clear()
+            _WATERSHED_CACHE.clear()
+            _MANNING_CACHE.clear()
         maps = generate_all_thematic_maps(lat, lon)
         map_sources = {k: v.get("source", "—") for k, v in LAYER_META.items()}
         return render_template(
@@ -2855,6 +2870,7 @@ def maps_view():
             author=MAP_AUTHOR,
             date=datetime.now().strftime("%d/%m/%Y"),
             maps_source=("real" if gee_ready() else "synthetic"),
+            app_version=APP_VERSION,
         )
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -2895,6 +2911,7 @@ def gee_status_route():
     """
     probe = request.args.get("probe", "0") in ("1", "true", "yes")
     st = gee_status(probe=probe)
+    st["app_version"] = APP_VERSION
     st["data_mode"] = "real" if st["ready"] else "synthetic"
     if not st["ready"]:
         st["how_to_fix"] = (
@@ -2919,6 +2936,7 @@ def watershed_status_route():
         morph = wd.get("morphometry") if wd else None
         is_real = bool(wd and wd.get("is_real"))
         out = {
+            "app_version": APP_VERSION,
             "lat": lat, "lon": lon,
             "delineation": "real (DEM Copernicus GLO-30 + pyflwdir/pysheds)" if is_real
                            else "esquemática (sintética)",
