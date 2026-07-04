@@ -158,6 +158,47 @@ def _s2_median(region):
     )
 
 
+def _l89_col(region):
+    """Landsat 8/9 Collection 2 L2 (SR) 2020–2024, nubes/sombras/cirros
+    enmascarados por píxel con QA_PIXEL (bits 2,3,4)."""
+    def _mask(img):
+        qa = img.select("QA_PIXEL")
+        bad = (qa.bitwiseAnd(1 << 3).neq(0)      # nube
+               .Or(qa.bitwiseAnd(1 << 4).neq(0))  # sombra de nube
+               .Or(qa.bitwiseAnd(1 << 2).neq(0)))  # cirro
+        return img.updateMask(bad.Not())
+    l8 = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
+    l9 = ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
+    return (l8.merge(l9)
+            .filterBounds(region)
+            .filterDate("2020-01-01", "2024-12-31")
+            .filter(ee.Filter.lt("CLOUD_COVER", 60))
+            .map(_mask))
+
+
+def _ndvi_multisource(region):
+    """
+    NDVI multi-fuente: Sentinel-2 (B8,B4; máscara SCL) + Landsat 8/9 C2 L2
+    (SR_B5,SR_B4 con factores de escala; máscara QA_PIXEL), mediana 2020–2024.
+    Combinar sensores da una mediana más poblada y estable (menos huecos por
+    nubes) — mismo criterio que los ejemplos de cuenca en el Code Editor de GEE.
+    """
+    s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+          .filterBounds(region)
+          .filterDate("2020-01-01", "2024-12-31")
+          .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
+          .map(_mask_s2_clouds)
+          .map(lambda i: i.normalizedDifference(["B8", "B4"]).rename("NDVI")))
+
+    def _l_ndvi(img):
+        nir = img.select("SR_B5").multiply(0.0000275).add(-0.2)
+        red = img.select("SR_B4").multiply(0.0000275).add(-0.2)
+        return nir.subtract(red).divide(nir.add(red)).rename("NDVI")
+
+    l89 = _l89_col(region).map(_l_ndvi)
+    return s2.merge(l89).median().clip(region)
+
+
 # Paletas y rangos por capa (también usadas para construir la leyenda)
 LAYER_META = {
     "dem": {
@@ -177,7 +218,7 @@ LAYER_META = {
     "ndvi": {
         "vmin": -0.2, "vmax": 0.85,
         "palette": ["#a50026", "#d73027", "#fdae61", "#a6d96a", "#1a9850", "#006837"],
-        "source": "Sentinel-2 L2A / ESA — 10 m | Mediana 2020–2023",
+        "source": "Sentinel-2 L2A + Landsat 8/9 C2 — mediana 2020–2024, nubes enmascaradas",
         "title": "Índice de Vegetación Normalizado (NDVI)",
         "legend": "NDVI (−1 a +1)",
     },
@@ -236,7 +277,7 @@ def _layer_image(map_type, region):
         return ee.Terrain.slope(dem).clip(region)
 
     if map_type == "ndvi":
-        return _s2_median(region).normalizedDifference(["B8", "B4"]).clip(region)
+        return _ndvi_multisource(region)
 
     if map_type == "ndwi":
         return _s2_median(region).normalizedDifference(["B3", "B8"]).clip(region)
@@ -633,10 +674,12 @@ def fetch_watershed_data(lat, lon, radius_km=15.0):
         return None
 
 
-# Capas con rango dependiente del terreno: se estira la paleta a los
-# percentiles 2–98 de la REGIÓN (si no, p.ej. el DEM amazónico a ~140 m queda
-# clampeado en un solo color con el rango fijo andino 1500–5500 m).
-_DYNAMIC_STRETCH = {"dem", "slope"}
+# Capas con rango dependiente del terreno/región: la paleta se estira a los
+# percentiles 2–98 de la REGIÓN (como los ejemplos de cuenca del Code Editor
+# de GEE, p.ej. "NDVI from 0.056 to 0.776"). Con rangos fijos, el DEM amazónico
+# quedaba en un solo color y los índices desperdiciaban la paleta en valores
+# inexistentes en la zona.
+_DYNAMIC_STRETCH = {"dem", "slope", "ndvi", "ndwi", "ndti"}
 
 
 def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
