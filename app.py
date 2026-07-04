@@ -787,10 +787,15 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
         if boundary[0] != boundary[-1]:
             boundary.append(boundary[0])
 
-        # Red de drenaje dentro de la cuenca
+        # Red de drenaje dentro de la cuenca. El umbral de inicio de cauce es
+        # RELATIVO AL ÁREA DE LA CUENCA (~1% del área total, piso 0.25 km²),
+        # no a la acumulación máxima: con el criterio anterior las cuencas
+        # grandes mostraban solo el tronco principal (red incompleta).
         channel, tributaries, lines_utm = [], [], []
         try:
-            thr = max(umax * 0.01, 30.0)
+            basin_cells = int(catch_arr.sum())
+            cells_025km2 = 0.25e6 / (res_m * res_m)
+            thr = max(basin_cells * 0.01, cells_025km2)
             mask = catch_arr & (uparea > thr)
             feats = flw.streams(mask=mask)
             lines_utm = [f['geometry']['coordinates'] for f in feats
@@ -803,7 +808,7 @@ def _delineate_pyflwdir(dem, transform, epsg, lat, lon):
                         for lo, la in (to_ll.transform(x, y) for x, y in coords)]
             if lines_utm:
                 channel = _to_ll(lines_utm[0])
-                tributaries = [_to_ll(c) for c in lines_utm[1:16]]
+                tributaries = [_to_ll(c) for c in lines_utm[1:80]]
         except Exception as e:
             print(f"pyflwdir streams failed: {e}")
 
@@ -919,10 +924,12 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
             if boundary[0] != boundary[-1]:
                 boundary.append(boundary[0])
 
-            # Red de drenaje
+            # Red de drenaje — umbral RELATIVO AL ÁREA DE LA CUENCA (~1% del
+            # área total según 'upa', piso 0.25 km²), no a la acumulación
+            # máxima: así la red sale completa también en cuencas grandes.
             channel, tributaries, lines_ll = [], [], []
             try:
-                thr = max(float(_np.nanmax(upa)) * 0.01, 1.0)
+                thr = max(area_upa * 0.01, 0.25)
                 mask = catch_arr & (upa > thr)
                 feats = flw.streams(mask=mask)
                 lines_ll = [f['geometry']['coordinates'] for f in feats
@@ -931,7 +938,7 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
                 if lines_ll:
                     channel = [[float(x), float(y)] for x, y in lines_ll[0]]
                     tributaries = [[[float(x), float(y)] for x, y in c]
-                                   for c in lines_ll[1:16]]
+                                   for c in lines_ll[1:80]]
             except Exception as e:
                 print(f"MERIT streams failed: {e}")
 
@@ -1617,13 +1624,18 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
 
     is_real = rgb_image is not None
     meta = LAYER_META.get(map_type, {})
+    # Mapa de cuenca con fondo de DEM real (vrange presente): la barra de color
+    # describe elevación → usa paleta/rótulo de la capa 'dem', no la de cuenca.
+    cb_meta = LAYER_META.get("dem", meta) \
+        if (map_type == "watershed" and vrange is not None) else meta
 
     # ── Data ─────────────────────────────────────────────────────────────
     if is_real:
         title = meta.get('title', MAP_TITLES.get(map_type, map_type.upper()))
         src   = meta.get('source', MAP_SOURCES.get(map_type, "—"))
-        lbl   = meta.get('legend', MAP_LEGEND_LABELS.get(map_type, "Valor"))
-        cmap  = LinearSegmentedColormap.from_list('gee_' + map_type, meta['palette'])
+        lbl   = cb_meta.get('legend', MAP_LEGEND_LABELS.get(map_type, "Valor"))
+        cmap  = LinearSegmentedColormap.from_list('gee_' + map_type,
+                                                  cb_meta['palette'])
     else:
         if data_array is None:
             data_array = _synthetic_data(map_type, lat=lat, lon=lon)
@@ -1699,7 +1711,9 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     # ── Colorbar ─────────────────────────────────────────────────────────
     # En el mapa de cuenca con fondo satelital real (RGB) la barra de color
     # no aporta significado, por lo que se omite.
-    show_cb = not (map_type == "watershed" and is_real)
+    # Sin barra solo cuando el fondo es satelital RGB (S2, sin escala de valor);
+    # con fondo de DEM real (vrange) sí hay barra de elevación.
+    show_cb = not (map_type == "watershed" and is_real and vrange is None)
     if show_cb:
         if is_real:
             _vmin = vrange[0] if vrange else meta['vmin']
@@ -1861,10 +1875,17 @@ def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None,
     if watershed_data is None:
         watershed_data = get_watershed_overlay(pt_lat, pt_lon, radius_km)
 
-    # Fondo: imagen satelital Sentinel-2 (GEE) o DEM sintético como base
-    rgb_bg = None
+    # Fondo, en orden de preferencia: Sentinel-2 real → DEM REAL (paleta
+    # dinámica) → DEM sintético solo si no hay GEE. Nunca mostrar topografía
+    # sintética cuando hay datos reales disponibles.
+    rgb_bg, vrange = None, None
     if gee_ready():
         rgb_bg = fetch_s2_rgb(lat, lon, radius_km=radius_km)
+        if rgb_bg is None:
+            thumb = fetch_gee_thumbnail("dem", lat, lon, radius_km=radius_km)
+            if thumb is not None:
+                rgb_bg, vmin_d, vmax_d = thumb
+                vrange = (vmin_d, vmax_d)
 
     if rgb_bg is None:
         dem_arr = _synthetic_data("dem", lat=lat, lon=lon)
@@ -1876,7 +1897,7 @@ def generate_watershed_map(lat, lon, radius_km=15.0, watershed_data=None,
         png = generate_cartographic_map(
             lat, lon, "watershed", radius_km=radius_km,
             rgb_image=rgb_bg, watershed_data=watershed_data,
-            point_lat=pt_lat, point_lon=pt_lon)
+            point_lat=pt_lat, point_lon=pt_lon, vrange=vrange)
 
     if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
         _MAP_CACHE.pop(next(iter(_MAP_CACHE)))

@@ -136,13 +136,24 @@ def _build_region(lat, lon, radius_km):
     )
 
 
+def _mask_s2_clouds(img):
+    """Enmascara nubes/sombras/cirros por píxel con la banda SCL (Scene
+    Classification): clases 3 = sombra de nube, 8/9 = nubes, 10 = cirro.
+    Sin esto, la mediana queda contaminada y los índices (NDVI/NDWI/NDTI)
+    no corresponden a valores reales, sobre todo en la Amazonía."""
+    scl = img.select("SCL")
+    bad = scl.eq(3).Or(scl.eq(8)).Or(scl.eq(9)).Or(scl.eq(10))
+    return img.updateMask(bad.Not())
+
+
 def _s2_median(region):
-    """Mediana Sentinel-2 SR libre de nubes 2020–2023."""
+    """Mediana Sentinel-2 SR 2020–2023 con máscara de nubes por píxel (SCL)."""
     return (
         ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
         .filterBounds(region)
         .filterDate("2020-01-01", "2023-12-31")
-        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 25))
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 40))
+        .map(_mask_s2_clouds)
         .median()
     )
 
