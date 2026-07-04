@@ -208,6 +208,72 @@ def _ndvi_multisource(region):
     return _index_multisource(region, ("B8", "B4"), ("SR_B5", "SR_B4"), "NDVI")
 
 
+def _modis_index(region, kind):
+    """
+    Índices a ESCALA DE CUENCA GRANDE con MODIS (diseñado para escala
+    continental; una mediana S2/Landsat de 10–30 m sobre >100 000 km² excede
+    los límites de cómputo de GEE y el mapa caía al sintético).
+      - NDVI: producto oficial MOD13Q1 (250 m, ×0.0001)
+      - NDWI (McFeeters): MOD09A1 500 m → (b04 verde − b02 NIR)/(suma)
+      - NDTI (Lacaux):    MOD09A1 500 m → (b01 rojo − b04 verde)/(suma)
+    """
+    if kind == "ndvi":
+        return (ee.ImageCollection("MODIS/061/MOD13Q1")
+                .filterBounds(region)
+                .filterDate("2020-01-01", "2024-12-31")
+                .select("NDVI")
+                .median().multiply(0.0001)
+                .rename("NDVI").clip(region))
+
+    col = (ee.ImageCollection("MODIS/061/MOD09A1")
+           .filterBounds(region)
+           .filterDate("2020-01-01", "2024-12-31"))
+
+    def _idx(img):
+        r = img.select("sur_refl_b01").multiply(0.0001)   # rojo
+        n = img.select("sur_refl_b02").multiply(0.0001)   # NIR
+        g = img.select("sur_refl_b04").multiply(0.0001)   # verde
+        if kind == "ndwi":
+            v = g.subtract(n).divide(g.add(n))
+        else:                                             # ndti
+            v = r.subtract(g).divide(r.add(g))
+        return v.rename(kind.upper())
+
+    return col.map(_idx).median().clip(region)
+
+
+def fetch_rivers_hydrosheds(boundary_lonlat, max_order=6, max_feats=400):
+    """
+    Red de drenaje VECTORIAL (WWF HydroSHEDS Free Flowing Rivers) dentro del
+    polígono de cuenca — para mega-cuencas donde la red ráster local (ventana
+    MERIT de ~74 km) solo cubre el entorno de la salida. RIV_ORD: 1 = río más
+    grande. Devuelve lista de polilíneas [[lon,lat],...] ordenadas por longitud.
+    """
+    if not _GEE_READY or not boundary_lonlat or len(boundary_lonlat) < 4:
+        return None
+    try:
+        ring = [[float(p[0]), float(p[1])] for p in boundary_lonlat]
+        poly = ee.Geometry.Polygon([ring])
+        fc = (ee.FeatureCollection("WWF/HydroSHEDS/v1/FreeFlowingRivers")
+              .filterBounds(poly)
+              .filter(ee.Filter.lte("RIV_ORD", max_order))
+              .limit(max_feats))
+        info = fc.getInfo()
+        lines = []
+        for f in info.get("features", []):
+            g = f.get("geometry", {})
+            if g.get("type") == "LineString":
+                lines.append(g["coordinates"])
+            elif g.get("type") == "MultiLineString":
+                lines.extend(g["coordinates"])
+        lines = [ln for ln in lines if len(ln) >= 2]
+        lines.sort(key=len, reverse=True)
+        return lines or None
+    except Exception as e:
+        print(f"fetch_rivers_hydrosheds failed: {e}")
+        return None
+
+
 # Paletas y rangos por capa (también usadas para construir la leyenda)
 LAYER_META = {
     "dem": {
@@ -276,8 +342,17 @@ LAYER_META = {
 }
 
 
-def _layer_image(map_type, region):
-    """Devuelve la ee.Image de banda única para la capa indicada."""
+# Por encima de este radio de ventana, los índices se calculan con MODIS:
+# una mediana S2/Landsat de 10–30 m sobre cientos de miles de km² excede los
+# límites de cómputo de GEE (y el mapa caía en silencio al fondo sintético).
+_LARGE_WINDOW_KM = 60.0
+
+
+def _layer_image(map_type, region, radius_km=15.0):
+    """Devuelve la ee.Image de banda única para la capa indicada, eligiendo
+    la fuente según la escala de la ventana (S2+Landsat vs MODIS)."""
+    large = radius_km > _LARGE_WINDOW_KM
+
     if map_type == "dem":
         return ee.Image("USGS/SRTMGL1_003").clip(region)
 
@@ -286,14 +361,20 @@ def _layer_image(map_type, region):
         return ee.Terrain.slope(dem).clip(region)
 
     if map_type == "ndvi":
+        if large:
+            return _modis_index(region, "ndvi")
         return _index_multisource(region, ("B8", "B4"),
                                   ("SR_B5", "SR_B4"), "NDVI")
 
     if map_type == "ndwi":
+        if large:
+            return _modis_index(region, "ndwi")
         return _index_multisource(region, ("B3", "B8"),
                                   ("SR_B3", "SR_B5"), "NDWI")
 
     if map_type == "ndti":
+        if large:
+            return _modis_index(region, "ndti")
         return _index_multisource(region, ("B4", "B3"),
                                   ("SR_B4", "SR_B3"), "NDTI")
 
@@ -710,7 +791,7 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
 
         region = _build_region(lat, lon, radius_km)
         meta = LAYER_META[map_type]
-        img = _layer_image(map_type, region)
+        img = _layer_image(map_type, region, radius_km=radius_km)
 
         vmin, vmax = meta["vmin"], meta["vmax"]
         if map_type in _DYNAMIC_STRETCH:
