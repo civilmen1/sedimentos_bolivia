@@ -225,21 +225,23 @@ def _modis_index(region, kind):
                 .median().multiply(0.0001)
                 .rename("NDVI").clip(region))
 
-    col = (ee.ImageCollection("MODIS/061/MOD09A1")
+    # Composición mediana PRIMERO, luego el cociente (barato). Mapear el
+    # cociente por imagen y luego reducir generaba un grafo de cómputo enorme
+    # sobre mega-cuencas (>100 000 km²): getThumbURL agotaba el tiempo y el
+    # mapa caía en silencio al fondo sintético (bug de NDWI/NDTI). Reduciendo
+    # primero, el coste iguala al del producto NDVI de MOD13Q1 (que sí salía).
+    med = (ee.ImageCollection("MODIS/061/MOD09A1")
            .filterBounds(region)
-           .filterDate("2020-01-01", "2024-12-31"))
-
-    def _idx(img):
-        r = img.select("sur_refl_b01").multiply(0.0001)   # rojo
-        n = img.select("sur_refl_b02").multiply(0.0001)   # NIR
-        g = img.select("sur_refl_b04").multiply(0.0001)   # verde
-        if kind == "ndwi":
-            v = g.subtract(n).divide(g.add(n))
-        else:                                             # ndti
-            v = r.subtract(g).divide(r.add(g))
-        return v.rename(kind.upper())
-
-    return col.map(_idx).median().clip(region)
+           .filterDate("2020-01-01", "2024-12-31")
+           .median())
+    r = med.select("sur_refl_b01")                        # rojo
+    n = med.select("sur_refl_b02")                        # NIR
+    g = med.select("sur_refl_b04")                        # verde
+    if kind == "ndwi":                                    # McFeeters (verde−NIR)
+        v = g.subtract(n).divide(g.add(n))
+    else:                                                 # NDTI Lacaux (rojo−verde)
+        v = r.subtract(g).divide(r.add(g))
+    return v.rename(kind.upper()).clip(region)
 
 
 def fetch_rivers_hydrosheds(boundary_lonlat, max_order=6, max_feats=400):

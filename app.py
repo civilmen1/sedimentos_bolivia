@@ -54,7 +54,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v36-escala-modis-rios"
+APP_VERSION = "v37-ndwi-ndti-modis-reduce-first"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -371,9 +371,9 @@ MAP_SOURCES = {
     'watershed': "Copernicus DEM GLO-30 (remuestreo bicúbico → 12.5 m) + geoproceso pyflwdir (D8) + Sentinel-2 L2A",
     'dem':      "SRTM v3 / NASA (2000) — 30 m",
     'slope':    "SRTM v3 + ee.Terrain.slope() / GEE — 30 m",
-    'ndvi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
-    'ndwi':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
-    'ndti':     "Sentinel-2 L2A / ESA — 10 m  |  Mediana 2020–2023",
+    'ndvi':     "Sentinel-2 L2A + Landsat 8/9 (mediana 2020–2024) · MODIS en mega-cuenca",
+    'ndwi':     "Sentinel-2 L2A + Landsat 8/9 (mediana 2020–2024) · MODIS en mega-cuenca",
+    'ndti':     "Sentinel-2 L2A + Landsat 8/9 (mediana 2020–2024) · MODIS en mega-cuenca",
     'manning':  "ESA WorldCover 2021 — 10 m  |  Reclasificación Manning's n",
     'risk':     "Multi-fuente GEE (SRTM + JRC + CN) — 30 m",
     'jrc':      "JRC Global Surface Water 1984–2021 / Landsat — 30 m",
