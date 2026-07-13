@@ -757,7 +757,7 @@ table tfoot td {
       <thead>
         <tr>
           <th>Método</th>
-          <th style="text-align:right;">Profundidad [m]</th>
+          <th style="text-align:right;">Valor</th>
           <th>Observaciones</th>
         </tr>
       </thead>
@@ -765,7 +765,7 @@ table tfoot td {
         {% for row in results.scour[gkey] %}
         <tr>
           <td><strong>{{ row.metodo }}</strong></td>
-          <td class="td-num">{{ '%.2f'|format(row.valor) if row.valor is not none else '—' }}</td>
+          <td class="td-num">{{ '%.2f'|format(row.valor) if row.valor is not none else '—' }} {{ row.unidad }}</td>
           <td><em>{{ row.nota }}</em></td>
         </tr>
         {% endfor %}
@@ -777,6 +777,7 @@ table tfoot td {
   {% if results.scour.avisos %}
   <p class="tbl-note no-indent" style="color:#b45309;"><strong>Avisos:</strong> {{ results.scour.avisos|join(' · ') }}</p>
   {% endif %}
+  <p class="tbl-note no-indent"><strong>Alcance de la percepción remota.</strong> La socavación no se mide con satélite: los sensores ópticos (Landsat, Sentinel-2) solo leen la superficie del agua y no penetran la columna turbia durante la avenida, que es cuando ocurre la fosa. Google Earth Engine aporta <em>insumos</em> de estas fórmulas (ancho del cauce B y B_e, W₁/W₂ por contracción, pendiente S, cobertura y aporte de sedimento por RUSLE), pero la profundidad de socavación debe verificarse con batimetría, ecosonda o instrumentación sumergida en la pila.</p>
   {% endif %}
 
 </div>
