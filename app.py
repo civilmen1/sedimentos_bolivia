@@ -2634,6 +2634,9 @@ def calculate():
             "estribo_theta": _optf("estribo_theta") or 90,
             "estribo_spill": bool(data.get("estribo_spill", True)),
             "estribo_agua_clara": bool(data.get("estribo_agua_clara", False)),
+            "estribo_q1q": _optf("estribo_q1q"),
+            "estribo_espigones": bool(data.get("estribo_espigones", False)),
+            "pila_inundacion": bool(data.get("pila_inundacion", False)),
         }
         try:
             scour = compute_socavacion(scour_params)
@@ -2815,6 +2818,9 @@ def report():
                 "estribo_theta": _ropt("estribo_theta") or 90,
                 "estribo_spill": bool(request.args.get("estribo_spill")),
                 "estribo_agua_clara": bool(request.args.get("estribo_agua_clara")),
+                "estribo_q1q": _ropt("estribo_q1q"),
+                "estribo_espigones": bool(request.args.get("estribo_espigones")),
+                "pila_inundacion": bool(request.args.get("pila_inundacion")),
             })
             has_scour = any(scour.get(k) for k in
                             ("general", "contraccion", "pila", "estribo"))
@@ -2949,6 +2955,9 @@ def report_pdf():
                 "estribo_theta": _ropt("estribo_theta") or 90,
                 "estribo_spill": bool(request.args.get("estribo_spill")),
                 "estribo_agua_clara": bool(request.args.get("estribo_agua_clara")),
+                "estribo_q1q": _ropt("estribo_q1q"),
+                "estribo_espigones": bool(request.args.get("estribo_espigones")),
+                "pila_inundacion": bool(request.args.get("pila_inundacion")),
             })
             has_scour = any(scour.get(k) for k in
                             ("general", "contraccion", "pila", "estribo"))

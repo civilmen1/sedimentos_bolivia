@@ -127,6 +127,30 @@ ABUT_SHAPE_KS = {
 # estribo y la ribera aguas arriba.
 _KTHETA_ESTRIBO = {30: 1.10, 60: 1.05, 90: 1.00, 120: 0.98, 150: 0.90}
 
+# ── ARTAMONOV — estribos (Maza 1968, ec. 36, p.92) ──────────────────────────
+# S_T = Pα · Pq · Pk · Ho  (medido desde la superficie libre del agua).
+# Pα — ángulo de esviaje del estribo. (El PDF empieza en 30°; la tabla clásica
+# de Artamonov arranca en 20° para 0.84 — posible error de lectura, ver aviso.)
+_ARTAMONOV_PALPHA = {30: 0.84, 60: 0.94, 90: 1.00, 120: 1.07, 150: 1.18}
+# Pq — relación de gastos Q1/Q (Q1 = gasto teórico por la zona del estribo).
+_ARTAMONOV_PQ = {0.10: 2.00, 0.20: 2.65, 0.30: 3.22, 0.40: 3.45,
+                 0.50: 3.67, 0.60: 3.87, 0.70: 4.06, 0.80: 4.20}
+# Pk — talud del estribo k (horizontal:vertical).
+_ARTAMONOV_PK = {0: 1.00, 0.5: 0.91, 1.0: 0.85, 1.5: 0.83, 2.0: 0.61, 3.0: 0.50}
+
+# ── YAROSLAVTZIEV — pilas (Maza 1968, ec. 35, pp.65-74) ─────────────────────
+# Kf — factor de forma de pila (valores tabulados del libro).
+_YAROS_KF = {
+    "rectangular": 12.4,       # Tipo I
+    "cuadrada": 12.4,
+    "circular": 10.0,          # Tipo II
+    "semicircular_triangular": 8.7,   # Tipo III frentes semicirc. (φ≈10°)
+    "rect_semicircular": 8.5,
+    "eliptica": 8.5,
+    "lenticular": 8.5,
+    "rect_triangular": 10.0,   # nariz apuntada, tajamar 90°
+}
+
 # Coeficientes de Yarnell — obstrucción por pilas (K y C_D).
 YARNELL_K = {
     "semicircular": {"K": 0.90, "Cd": 0.90},
@@ -344,6 +368,33 @@ def csu_hec18_pila(a, y1, Fr1, K1=1.0, K2=1.0, K3=1.1, K4=1.0, aplicar_tope=True
     return ys
 
 
+def yaroslavtziev(V, b1, H, Kf, D85_m=0.0, C=0.6):
+    """
+    Yaroslavtziev (Maza 1968, ec.35) — socavación local en pila (desde el
+    fondo ya erosionado por socavación general):
+        S_o = Kf·Kv·(C+KH)·V²/g − 30·D85
+    con las funciones ANALÍTICAS (el libro advierte usar la ecuación, no la
+    figura):
+        log Kv = −0.28·√(V²/(g·b1))
+        log KH = 0.17 − 0.35·(H/b1)
+
+    Unidades: V (m/s), b1 (m) proyección de la pila ⊥ al flujo, H (m),
+    D85 en METROS. C = 0.6 (cauce principal) ó 1.0 (cauce de inundación).
+    Si D85 < 0.005 m (arenas < 0.5 cm) el término −30·D85 se omite (sin
+    acorazamiento).
+
+    NOTA de unidades: el cuaderno transcribió D85 "en cm" con el término −30·D85,
+    lo que es dimensionalmente inconsistente (restaría decenas de metros). Se usa
+    la forma publicada estándar con D85 en METROS; conviene verificar contra la
+    figura original del PDF de Maza.
+    """
+    Kv = 10.0 ** (-0.28 * np.sqrt(V ** 2 / (G * b1)))
+    KH = 10.0 ** (0.17 - 0.35 * (H / b1))
+    termino_d = 30.0 * D85_m if D85_m >= 0.005 else 0.0
+    So = Kf * Kv * (C + KH) * V ** 2 / G - termino_d
+    return max(So, 0.0)
+
+
 # ===========================================================================
 # 4. SOCAVACIÓN LOCAL EN ESTRIBOS
 # ===========================================================================
@@ -377,6 +428,23 @@ def laursen_estribo(L, y, agua_clara=False):
 def ktheta_estribo(theta_deg):
     """Factor Kθ por esviaje del estribo (Manual ABC, interpolado)."""
     return _interp_table(_KTHETA_ESTRIBO, float(theta_deg))
+
+
+def artamonov(Ho, Q1_Q, alpha=90, k=0.0, espigones=False):
+    """
+    Artamonov (Maza 1968, ec.36) — socavación al pie del estribo:
+        S_T = Pα · Pq · Pk · Ho     (medido desde la SUPERFICIE del agua)
+    Pα = ángulo de esviaje α ; Pq = relación de gastos Q1/Q ; Pk = talud k.
+    `espigones=True` (espigones enfrentados en ambas orillas) aplica −25 %.
+    Devuelve (S_T desde superficie, socavación local = S_T − Ho).
+    """
+    Pa = _interp_table(_ARTAMONOV_PALPHA, float(alpha))
+    Pq = _interp_table(_ARTAMONOV_PQ, float(Q1_Q))
+    Pk = _interp_table(_ARTAMONOV_PK, float(k))
+    St = Pa * Pq * Pk * Ho
+    if espigones:
+        St *= 0.75
+    return St, max(St - Ho, 0.0)
 
 
 # ===========================================================================
@@ -528,6 +596,23 @@ def compute_socavacion(params):
                 "CSU / HEC-18 (normativo)", ys, "m",
                 f"Ks={Ks} Kω={Kw:.2f} K3={K3} · Fr={fr} · tope {tope:.2f} m{capped}",
                 "Richardson & Davis 1995 / HEC-18"))
+        # Yaroslavtziev (Maza) — requiere velocidad
+        if v:
+            Kf = _YAROS_KF.get(forma, 10.0)
+            # b1 = proyección ⊥ al flujo; con largo y ángulo, para rectangular
+            b1 = b
+            if theta and largo:
+                b1 = largo * np.sin(np.radians(theta)) + b * np.cos(np.radians(theta))
+            # D85 ≈ d90 (proxy), de mm a m
+            d85_m = (d90 / 1000.0) if d90 else 0.0
+            C = 1.0 if params.get("pila_inundacion") else 0.6
+            sy = yaroslavtziev(v, b1, y, Kf, D85_m=d85_m, C=C)
+            zona = "cauce de inundación" if C == 1.0 else "cauce principal"
+            out["pila"].append(_row(
+                "Yaroslavtziev (Maza)", sy, "m",
+                f"Kf={Kf} · b1={b1:.2f} m · C={C} ({zona})"
+                + (" · D85≈d90" if d85_m >= 0.005 else " · arena (sin −30·D85)"),
+                "Yaroslavtziev / Maza 1968"))
 
     # --- 4. ESTRIBOS ---
     L = params.get("estribo_L")
@@ -553,5 +638,19 @@ def compute_socavacion(params):
         out["estribo"].append(_row(
             "Laursen (estribo)", laursen_estribo(L, y, agua_clara=agua_clara),
             "m", f"{'agua clara' if agua_clara else 'lecho móvil'}", "Laursen 1962/63"))
+        # Artamonov (Maza) — requiere la relación de gastos Q1/Q
+        q1q = params.get("estribo_q1q")
+        if q1q:
+            # talud k desde la forma del estribo (H:V)
+            k_map = {"talud_1_2": 0.5, "talud_1_1": 1.0, "talud_15_1": 1.5,
+                     "talud_2_1": 2.0, "spill": 1.5}
+            k = k_map.get(forma_e, 0.0)
+            alpha_a = params.get("estribo_theta", 90)
+            espig = bool(params.get("estribo_espigones", False))
+            St, sc_a = artamonov(y, q1q, alpha=alpha_a, k=k, espigones=espig)
+            out["estribo"].append(_row(
+                "Artamonov (Maza)", sc_a, "m",
+                f"S_T={St:.2f} m desde superficie · Q1/Q={q1q} · k={k} · α={alpha_a}°"
+                + (" · espigones −25%" if espig else ""), "Artamonov / Maza 1968"))
 
     return out

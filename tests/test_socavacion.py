@@ -164,6 +164,41 @@ def test_csu_pila_tope():
     assert ys <= 3.0 * b + 1e-9
 
 
+def test_artamonov():
+    # Caso especial: estribo recto y vertical (α=90, k=0) -> S_T = Pq·Ho
+    St, socav = sc.artamonov(Ho=2.0, Q1_Q=0.30, alpha=90, k=0.0)
+    assert St == pytest.approx(3.22 * 2.0, rel=1e-6)   # Pq(0.30)=3.22
+    assert socav == pytest.approx(St - 2.0, rel=1e-6)
+
+
+def test_artamonov_talud_reduce():
+    # Un talud mayor reduce la socavación (Pk decrece)
+    _, sc_vert = sc.artamonov(2.0, 0.40, alpha=90, k=0.0)
+    _, sc_talud = sc.artamonov(2.0, 0.40, alpha=90, k=2.0)
+    assert sc_talud < sc_vert
+
+
+def test_artamonov_espigones_reduce_25pct():
+    St_normal, _ = sc.artamonov(2.0, 0.50, alpha=90, k=1.0, espigones=False)
+    St_espig, _ = sc.artamonov(2.0, 0.50, alpha=90, k=1.0, espigones=True)
+    assert St_espig == pytest.approx(0.75 * St_normal, rel=1e-6)
+
+
+def test_yaroslavtziev_arena_omite_termino_d():
+    # D85 < 0.005 m (arena) -> el término -30·D85 se omite; So positivo
+    so = sc.yaroslavtziev(V=2.0, b1=1.5, H=2.0, Kf=12.4, D85_m=0.002)
+    assert so > 0
+
+
+def test_yaroslavtziev_grava_resta_termino():
+    # Con grava (D85>=0.005 m) el término -30·D85 reduce la socavación
+    so_sin = sc.yaroslavtziev(2.0, 1.5, 2.0, 12.4, D85_m=0.0)
+    so_con = sc.yaroslavtziev(2.0, 1.5, 2.0, 12.4, D85_m=0.01)
+    assert so_con < so_sin
+    # y el resultado sigue siendo físicamente razonable (no decenas de metros)
+    assert 0 <= so_con < 10
+
+
 def test_laursen_estribo_agua_clara_mayor():
     clara = sc.laursen_estribo(8.0, 2.0, agua_clara=True)
     movil = sc.laursen_estribo(8.0, 2.0, agua_clara=False)

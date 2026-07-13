@@ -287,6 +287,11 @@
                 <option value="clara">Agua clara</option>
               </select>
             </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Relación Q₁/Q <span class="text-slate-400">Artamonov</span></label>
+              <input type="number" id="estribo_q1q" step="0.01" min="0.1" max="0.8" placeholder="0.10–0.80"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
           </div>
         </details>
 
@@ -745,6 +750,7 @@ async function calculateAll() {
     estribo_theta:   document.getElementById('estribo_theta').value,
     estribo_spill:   document.getElementById('estribo_forma').value.startsWith('talud'),
     estribo_agua_clara: document.getElementById('estribo_regimen').value === 'clara',
+    estribo_q1q:     document.getElementById('estribo_q1q').value,
   };
 
   try {
@@ -941,6 +947,7 @@ function generateReport() {
     estribo_theta:   document.getElementById('estribo_theta').value,
     estribo_spill:   document.getElementById('estribo_forma').value.startsWith('talud') ? '1' : '',
     estribo_agua_clara: document.getElementById('estribo_regimen').value === 'clara' ? '1' : '',
+    estribo_q1q:     document.getElementById('estribo_q1q').value,
   });
   window.open('/report?' + p.toString(), '_blank');
 }
