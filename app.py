@@ -2621,6 +2621,8 @@ def calculate():
             "tr": _optf("periodo_retorno") or 100,
             "cohesivo": bool(data.get("cohesivo", False)),
             "gamma_s": _optf("gamma_s"),
+            "gamma_mezcla": _optf("gamma_mezcla"),
+            "claro_pilas": _optf("claro_pilas"),
             "mu": _optf("mu") or 1.0,
             "pila_ancho": _optf("pila_ancho"),
             "pila_forma": data.get("pila_forma", "circular"),
@@ -2628,6 +2630,8 @@ def calculate():
             "pila_largo": _optf("pila_largo"),
             "pila_lecho": data.get("pila_lecho", "plano"),
             "estribo_L": _optf("estribo_l"),
+            "estribo_forma": data.get("estribo_forma"),
+            "estribo_theta": _optf("estribo_theta") or 90,
             "estribo_spill": bool(data.get("estribo_spill", True)),
             "estribo_agua_clara": bool(data.get("estribo_agua_clara", False)),
         }
@@ -2799,13 +2803,18 @@ def report():
                 "Q": _ropt("caudal"), "B": _ropt("ancho_b"),
                 "W2": _ropt("ancho_w2"), "tr": _ropt("periodo_retorno") or 100,
                 "cohesivo": bool(request.args.get("cohesivo")),
-                "gamma_s": _ropt("gamma_s"), "mu": _ropt("mu") or 1.0,
+                "gamma_s": _ropt("gamma_s"),
+                "gamma_mezcla": _ropt("gamma_mezcla"),
+                "claro_pilas": _ropt("claro_pilas"), "mu": _ropt("mu") or 1.0,
                 "pila_ancho": _ropt("pila_ancho"),
                 "pila_forma": request.args.get("pila_forma", "circular"),
                 "pila_theta": _ropt("pila_theta") or 0.0,
                 "pila_largo": _ropt("pila_largo"),
                 "estribo_L": _ropt("estribo_l"),
+                "estribo_forma": request.args.get("estribo_forma"),
+                "estribo_theta": _ropt("estribo_theta") or 90,
                 "estribo_spill": bool(request.args.get("estribo_spill")),
+                "estribo_agua_clara": bool(request.args.get("estribo_agua_clara")),
             })
             has_scour = any(scour.get(k) for k in
                             ("general", "contraccion", "pila", "estribo"))
@@ -2928,13 +2937,18 @@ def report_pdf():
                 "Q": _ropt("caudal"), "B": _ropt("ancho_b"),
                 "W2": _ropt("ancho_w2"), "tr": _ropt("periodo_retorno") or 100,
                 "cohesivo": bool(request.args.get("cohesivo")),
-                "gamma_s": _ropt("gamma_s"), "mu": _ropt("mu") or 1.0,
+                "gamma_s": _ropt("gamma_s"),
+                "gamma_mezcla": _ropt("gamma_mezcla"),
+                "claro_pilas": _ropt("claro_pilas"), "mu": _ropt("mu") or 1.0,
                 "pila_ancho": _ropt("pila_ancho"),
                 "pila_forma": request.args.get("pila_forma", "circular"),
                 "pila_theta": _ropt("pila_theta") or 0.0,
                 "pila_largo": _ropt("pila_largo"),
                 "estribo_L": _ropt("estribo_l"),
+                "estribo_forma": request.args.get("estribo_forma"),
+                "estribo_theta": _ropt("estribo_theta") or 90,
                 "estribo_spill": bool(request.args.get("estribo_spill")),
+                "estribo_agua_clara": bool(request.args.get("estribo_agua_clara")),
             })
             has_scour = any(scour.get(k) for k in
                             ("general", "contraccion", "pila", "estribo"))

@@ -1,25 +1,28 @@
 """
 Módulo de socavación fluvial.
 
-Fórmulas tomadas del cuaderno HIDRAULICA FLUVIAL (NotebookLM), con las fuentes:
-    - AnalisisdelaSocavacionenCaucesNaturales.pdf
-    - Socavacion cauces naturales_Maza.pdf
-    - Hidrología e Hidráulica Aplicada a puentes.pdf
-    - Hydraulic Design of Safe Bridges (FHWA / HEC-18)
-    - manual_de_hidrologia_y_drenaje.pdf
+Fórmulas y coeficientes verificados contra las FUENTES PRIMARIAS del cuaderno
+HIDRÁULICA FLUVIAL (NotebookLM), aislando cada PDF para evitar recuperación
+cruzada:
+    - Maza Álvarez, J.A. (1968). Socavación en Cauces Naturales. SOP, México.
+      → Lischtvan-Lebediev completo, tablas β (p.9), x (p.10) y μ (p.13), ψ.
+    - Manual de Hidrología y Drenaje, Administradora Boliviana de Carreteras
+      (ABC) → §6.5: socavación en pilas (Tablas 6.5-1 a 6.5-4) y estribos
+      (§6.5.3, Froehlich/HEC-18, tablas Ks y Kθ). REFERENCIA NORMATIVA BOLIVIA.
+    - Hydraulic Design of Safe Bridges (FHWA, HEC-18, 2012).
 
-Se distinguen cuatro tipos:
-    1. Socavación GENERAL      (descenso generalizado del fondo)
-    2. Socavación por CONTRACCIÓN (estrechamiento de la sección)
-    3. Socavación LOCAL EN PILAS  (pie de pila de puente)
-    4. Socavación LOCAL EN ESTRIBOS
+Cuatro tipos:
+    1. GENERAL       (descenso generalizado del fondo)
+    2. CONTRACCIÓN   (estrechamiento de la sección)
+    3. LOCAL EN PILAS
+    4. LOCAL EN ESTRIBOS
 
 OJO con las unidades del diámetro: cambian de método a método
-(mm en Lacey y Blench; m en Lischtvan-Lebediev y Kellerhals).
+(mm en Lacey, Blench y HEC-18 forma "1.48"; m en Lischtvan-Lebediev, Kellerhals
+y V_c).
 
-Todas las funciones son puras: reciben números y devuelven números (SI).
-La función orquestadora `compute_socavacion(params)` arma el resultado
-estructurado para la app, calculando solo los métodos cuyos datos existen.
+Todas las funciones son puras (números → números, SI). La función
+`compute_socavacion(params)` arma el resultado estructurado para la app.
 """
 
 import numpy as np
@@ -28,17 +31,17 @@ G = 9.807
 
 
 # ---------------------------------------------------------------------------
-# TABLAS DE COEFICIENTES
+# TABLAS DE COEFICIENTES  (verificadas contra Maza 1968 y Manual ABC)
 # ---------------------------------------------------------------------------
 
-# Coeficiente β de Lischtvan-Lebediev según periodo de retorno de la avenida.
-# (Tablas estándar de Maza Álvarez — confirmar valores exactos contra la fuente.)
+# β — coeficiente de paso según periodo de retorno (Maza 1968, p.9).
+# Prob. excedencia 100%→Tr1 ... 0.1%→Tr1000.
 _BETA_TR = {
     1: 0.77, 2: 0.82, 5: 0.86, 10: 0.90, 20: 0.94,
     50: 0.97, 100: 1.00, 300: 1.03, 500: 1.05, 1000: 1.07,
 }
 
-# Exponente x — suelos NO cohesivos, en función del diámetro medio d_m (mm).
+# x — exponente, suelos NO cohesivos vs diámetro medio d_m (mm). Maza p.10.
 _X_NO_COHESIVO = {
     0.05: 0.43, 0.15: 0.42, 0.50: 0.41, 1.0: 0.40, 1.5: 0.39,
     2.5: 0.38, 4.0: 0.37, 6.0: 0.36, 8.0: 0.35, 10: 0.34,
@@ -47,30 +50,82 @@ _X_NO_COHESIVO = {
     370: 0.23, 450: 0.22, 570: 0.21, 750: 0.20, 1000: 0.19,
 }
 
-# Exponente x — suelos COHESIVOS, en función del peso específico seco γs (t/m³).
+# x — exponente, suelos COHESIVOS vs peso específico seco γs (t/m³). Maza p.10.
 _X_COHESIVO = {
-    0.80: 0.52, 0.86: 0.50, 0.90: 0.48, 0.96: 0.46, 1.00: 0.44,
-    1.08: 0.42, 1.16: 0.40, 1.24: 0.38, 1.34: 0.36, 1.40: 0.35,
-    1.46: 0.34, 1.52: 0.33, 1.58: 0.32, 1.64: 0.31, 1.71: 0.30,
-    1.80: 0.29, 1.89: 0.28, 2.00: 0.27,
+    0.80: 0.52, 0.83: 0.51, 0.86: 0.50, 0.88: 0.49, 0.90: 0.48,
+    0.93: 0.47, 0.96: 0.46, 0.98: 0.45, 1.00: 0.44, 1.04: 0.43,
+    1.08: 0.42, 1.12: 0.41, 1.16: 0.40, 1.20: 0.39, 1.24: 0.38,
+    1.28: 0.37, 1.34: 0.36, 1.40: 0.35, 1.46: 0.34, 1.52: 0.33,
+    1.58: 0.32, 1.64: 0.31, 1.71: 0.30, 1.80: 0.29, 1.89: 0.28,
+    2.00: 0.27,
 }
 
-# Factor K1 por forma de la nariz de la pila (CSU / HEC-18).
+# ψ — corrección por sedimento en suspensión (Maza p.11, Tabla 6.5-14 ABC).
+# Entrada: peso específico de la mezcla agua-sedimento γ_mezcla (t/m³).
+_PSI_SUSPENSION = {
+    1.00: 1.00, 1.05: 1.08, 1.10: 1.13, 1.15: 1.20, 1.20: 1.27,
+    1.25: 1.34, 1.30: 1.42, 1.35: 1.50, 1.40: 1.60,
+}
+
+# μ — factor de contracción por pilas (Maza 1968, p.13).
+# Doble entrada: velocidad media V (filas) × claro libre entre pilas (columnas).
+# La celda (2.0 m/s, 16 m) del PDF sale 0.97 por error de OCR; se corrige a 0.95
+# para respetar la monotonía de la tabla.
+_MU_CLAROS = [10, 13, 16, 18, 21, 25, 30, 42, 52, 63, 106, 124, 200]
+_MU_VELOCIDADES = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0]
+_MU_MATRIZ = [
+    [0.96, 0.97, 0.98, 0.98, 0.99, 0.99, 0.99, 1.00, 1.00, 1.00, 1.00, 1.00, 1.00],
+    [0.94, 0.96, 0.97, 0.97, 0.97, 0.98, 0.99, 0.99, 0.99, 0.99, 1.00, 1.00, 1.00],
+    [0.93, 0.94, 0.95, 0.96, 0.97, 0.97, 0.98, 0.98, 0.99, 0.99, 0.99, 0.99, 1.00],
+    [0.90, 0.93, 0.94, 0.95, 0.96, 0.96, 0.97, 0.98, 0.98, 0.99, 0.99, 0.99, 1.00],
+    [0.89, 0.91, 0.93, 0.94, 0.95, 0.96, 0.96, 0.97, 0.98, 0.98, 0.99, 0.99, 0.99],
+    [0.87, 0.90, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.98, 0.99, 0.99, 0.99],
+    [0.85, 0.89, 0.91, 0.92, 0.93, 0.94, 0.95, 0.96, 0.97, 0.98, 0.99, 0.99, 0.99],
+]
+
+# k1 — exponente de Laursen para contracción, según u*/w (HEC-18).
+# (se resuelve en k1_contraccion)
+
+# Ks — forma de la pila (Manual ABC, Tabla 6.5-1). Valor representativo.
 PIER_SHAPE_K1 = {
-    "cuadrada": 1.1,
-    "redondeada": 1.0,
-    "circular": 1.0,
-    "grupo_cilindros": 1.0,
-    "triangular": 0.9,   # nariz triangular afilada
+    "circular": 1.00,
+    "lenticular": 0.75,
+    "eliptica": 0.70,
+    "rectangular": 1.10,
+    "rect_semicircular": 0.90,       # rectangular con extremo semicircular
+    "rect_redondeado": 1.01,
+    "semicircular_triangular": 0.86,  # nariz semicircular y cola triangular
+    "rect_triangular": 0.70,          # rectangular con nariz triangular
+    # compatibilidad con nombres previos del formulario:
+    "cuadrada": 1.10,
+    "triangular": 0.70,
+    "grupo_cilindros": 1.00,
 }
 
-# Factor K3 por condición del lecho (CSU / HEC-18).
+# K3 — condición del lecho (CSU / HEC-18).
 PIER_BED_K3 = {
-    "plano": 1.1,        # lecho plano o dunas pequeñas
-    "dunas_medianas": 1.1,
-    "dunas_grandes": 1.3,
-    "antidunas": 1.1,
+    "plano": 1.1, "dunas_medianas": 1.1, "dunas_grandes": 1.3, "antidunas": 1.1,
 }
+
+# Kd (Ettema 1980) — tamaño relativo del sedimento en pilas (ABC Tabla 6.5-4).
+_KD_ETTEMA = {8: 0.72, 10: 0.77, 15: 0.87, 20: 0.94, 25: 1.00, 30: 1.00, 50: 1.00}
+
+# Ks — forma del estribo (Manual ABC, §6.5.3.2).
+ABUT_SHAPE_KS = {
+    "vertical": 1.00,
+    "vertical_semicircular": 0.75,
+    "vertical_aletas": 0.75,
+    "talud_1_2": 0.60,   # pared inclinada H:V = 1:2
+    "talud_1_1": 0.50,
+    "talud_15_1": 0.45,
+    "talud_2_1": 0.30,
+    # compatibilidad: "spill-through" con talud ≈ 0.55, vertical = 1.00
+    "spill": 0.55,
+}
+
+# Kθ — ángulo de esviaje del estribo (Manual ABC). φ medido entre el eje del
+# estribo y la ribera aguas arriba.
+_KTHETA_ESTRIBO = {30: 1.10, 60: 1.05, 90: 1.00, 120: 0.98, 150: 0.90}
 
 # Coeficientes de Yarnell — obstrucción por pilas (K y C_D).
 YARNELL_K = {
@@ -84,7 +139,7 @@ YARNELL_K = {
 
 
 def _interp_table(table, key):
-    """Interpolación lineal sobre una tabla {x: y} ordenada por clave."""
+    """Interpolación lineal sobre una tabla {x: y} (extremos planos)."""
     xs = sorted(table.keys())
     if key <= xs[0]:
         return table[xs[0]]
@@ -94,16 +149,12 @@ def _interp_table(table, key):
 
 
 def beta_periodo_retorno(tr_anios):
-    """Coeficiente β de Lischtvan-Lebediev según el periodo de retorno (años)."""
+    """Coeficiente β de Lischtvan-Lebediev según periodo de retorno (años)."""
     return _interp_table(_BETA_TR, float(tr_anios))
 
 
 def exponente_x(dm_mm=None, gamma_s=None, cohesivo=False):
-    """
-    Exponente x de Lischtvan-Lebediev.
-    - No cohesivo: función de d_m (mm).
-    - Cohesivo:    función de γs (t/m³).
-    """
+    """Exponente x. No cohesivo: f(d_m mm). Cohesivo: f(γs t/m³)."""
     if cohesivo:
         if gamma_s is None:
             raise ValueError("Suelo cohesivo requiere gamma_s (t/m³)")
@@ -113,24 +164,52 @@ def exponente_x(dm_mm=None, gamma_s=None, cohesivo=False):
     return _interp_table(_X_NO_COHESIVO, float(dm_mm))
 
 
+def psi_suspension(gamma_mezcla):
+    """Corrección ψ por sedimento en suspensión, según γ de la mezcla (t/m³)."""
+    return _interp_table(_PSI_SUSPENSION, float(gamma_mezcla))
+
+
+def mu_contraccion(velocidad, claro_libre):
+    """
+    Factor de contracción μ por pilas (Maza 1968, p.13), interpolación bilineal.
+        velocidad    : velocidad media de la corriente (m/s)
+        claro_libre  : claro libre entre pilas / luz del vano (m)
+    Para V < 1 m/s, μ = 1.00.
+    """
+    v = float(velocidad)
+    c = float(claro_libre)
+    if v < 1.0:
+        return 1.00
+    # columna interpolada para cada fila de velocidad, luego interpolar en V
+    col_vals = [float(np.interp(c, _MU_CLAROS, fila)) for fila in _MU_MATRIZ]
+    return float(np.interp(v, _MU_VELOCIDADES, col_vals))
+
+
+def velocidad_critica(y1, d50_mm):
+    """
+    Velocidad crítica de arrastre (Laursen, S.I.):
+        V_c = 6.2 · y1^(1/6) · d50^(1/3)   [d50 en METROS]
+    Sirve para decidir el régimen de contracción:
+        V1 < V_c -> agua clara ; V1 >= V_c -> lecho vivo.
+    """
+    d50_m = d50_mm / 1000.0
+    return 6.2 * y1 ** (1.0 / 6.0) * d50_m ** (1.0 / 3.0)
+
+
 # ===========================================================================
 # 1. SOCAVACIÓN GENERAL
 # ===========================================================================
 
 def lacey(Q, dm_mm):
-    """
-    Lacey (1930) — cauces aluviales con lecho de arena.
-        h_ms = 0.389 * (Q^(1/3) / d_m^(1/6))
-    Q en m³/s ; d_m en mm ; devuelve profundidad media de socavación (m).
-    """
+    """Lacey (1930). Q (m³/s), d_m (mm). h_ms = 0.389·Q^(1/3)/d_m^(1/6)."""
     return 0.389 * (Q ** (1.0 / 3.0) / dm_mm ** (1.0 / 6.0))
 
 
 def blench(q, d50_mm):
     """
-    Blench (1969). q = caudal unitario (m³/s·m) ; d50 en mm.
-        arenas (0.06 < d50 < 2 mm): h_ms = 1.200 * q^(2/3) / d50^(1/6)
-        grava gruesa (d50 > 2 mm):  h_ms = 1.230 * q^(2/3) / d50^(1/12)
+    Blench (1969). q caudal unitario (m³/s·m), d50 (mm).
+        arenas (d50<2mm): 1.200·q^(2/3)/d50^(1/6)
+        grava  (d50>2mm): 1.230·q^(2/3)/d50^(1/12)
     """
     if d50_mm > 2.0:
         return 1.230 * q ** (2.0 / 3.0) / d50_mm ** (1.0 / 12.0)
@@ -138,63 +217,39 @@ def blench(q, d50_mm):
 
 
 def maza_echavarria(Q, B, d50_m):
-    """
-    Maza & Echavarría (1973) — calibrada con ríos sudamericanos.
-        h_ms = 0.365 * Q^0.784 / (B^0.784 * d50^0.157)
-    Q en m³/s ; B (ancho del espejo) en m ; d50 en METROS.
-    """
+    """Maza & Echavarría (1973). Q (m³/s), B (m), d50 en METROS."""
     return 0.365 * (Q ** 0.784) / (B ** 0.784 * d50_m ** 0.157)
 
 
 def lischtvan_lebediev_reducida(q, d50_m):
-    """
-    Lischtvan-Lebediev (forma reducida, rango de arenas).
-        h_ms = 0.333 * q^0.710 / d50^0.199
-    q = caudal unitario (m³/s·m) ; d50 en METROS.
-    """
+    """L-L forma reducida (arenas). q (m³/s·m), d50 en METROS."""
     return 0.333 * q ** 0.710 / d50_m ** 0.199
 
 
 def kellerhals(q, d90_m):
-    """
-    Kellerhals — lechos de grava gruesa.
-        h_ms = 0.470 * q^0.800 / d90^0.120
-    q = caudal unitario local (m³/s·m) ; d90 en METROS.
-    """
+    """Kellerhals (grava gruesa). q (m³/s·m), d90 en METROS."""
     return 0.470 * q ** 0.800 / d90_m ** 0.120
 
 
 def lischtvan_lebediev_maza(Ho, Hm, Q, We, mu, beta, cohesivo=False,
-                            dm_mm=None, gamma_s=None):
+                            dm_mm=None, gamma_s=None, psi=1.0):
     """
     Lischtvan-Lebediev / Maza (1968) — método completo por franjas.
 
-    Coeficiente de distribución de gasto:
-        α = Q / (Hm^(5/3) · We · μ)
+    α = Q / (Hm^(5/3) · We · μ)
+        No cohesivo: Hs = [ α·Ho^(5/3) / (0.68·β·ψ·d_m^0.28) ]^(1/(1+x))
+        Cohesivo:    Hs = [ α·Ho^(5/3) / (0.60·β·ψ·γs^1.18) ]^(1/(1+x))
 
-    Profundidad total socavada Hs (medida desde la superficie):
-        No cohesivo: Hs = [ α·Ho^(5/3) / (0.68·β·d_m^0.28) ]^(1/(1+x))
-        Cohesivo:    Hs = [ α·Ho^(5/3) / (0.60·β·γs^1.18) ]^(1/(1+x))
-
-    Parámetros:
-        Ho     tirante inicial de la franja (m)
-        Hm     tirante medio de aproximación (m)
-        Q      caudal de diseño (m³/s)
-        We     ancho efectivo (m)
-        mu     factor de contracción (μ)
-        beta   coeficiente por periodo de retorno
-        dm_mm  d_m en mm (suelo no cohesivo)
-        gamma_s peso específico seco (t/m³) (suelo cohesivo)
-
-    Devuelve (Hs, socavacion) con socavacion = Hs - Ho (m).
+    ψ (sedimento en suspensión) va en el denominador junto a β (Maza).
+    Devuelve (Hs desde la superficie, socavación = Hs - Ho).
     """
     alpha = Q / (Hm ** (5.0 / 3.0) * We * mu)
     x = exponente_x(dm_mm=dm_mm, gamma_s=gamma_s, cohesivo=cohesivo)
     exp = 1.0 / (1.0 + x)
     if cohesivo:
-        denom = 0.60 * beta * gamma_s ** 1.18
+        denom = 0.60 * beta * psi * gamma_s ** 1.18
     else:
-        denom = 0.68 * beta * dm_mm ** 0.28
+        denom = 0.68 * beta * psi * dm_mm ** 0.28
     Hs = (alpha * Ho ** (5.0 / 3.0) / denom) ** exp
     return Hs, max(Hs - Ho, 0.0)
 
@@ -204,12 +259,7 @@ def lischtvan_lebediev_maza(Ho, Hm, Q, We, mu, beta, cohesivo=False,
 # ===========================================================================
 
 def k1_contraccion(u_star, w):
-    """
-    Exponente k1 de Laursen según la relación u*/w (modo de transporte).
-        < 0.5   -> 0.59 (arrastre de fondo)
-        0.5-2.0 -> 0.64 (inicio de suspensión)
-        > 2.0   -> 0.69 (suspensión)
-    """
+    """Exponente k1 de Laursen según u*/w (modo de transporte)."""
     if w <= 0:
         return 0.64
     r = u_star / w
@@ -221,35 +271,35 @@ def k1_contraccion(u_star, w):
 
 
 def laursen_contraccion_lecho_vivo(y1, W1, W2, k1):
-    """
-    Laursen — contracción en lecho móvil (live-bed).
-        y2 = y1 · (W1/W2)^k1
-    Devuelve (y2, socavacion = y2 - y1).
-    """
+    """Laursen — lecho vivo. y2 = y1·(W1/W2)^k1. Devuelve (y2, y2-y1)."""
     y2 = y1 * (W1 / W2) ** k1
     return y2, max(y2 - y1, 0.0)
 
 
+def laursen_contraccion_agua_clara(y1, W1, W2, V1, d50_mm):
+    """
+    Laursen — agua clara (forma completa, S.I.):
+        y2/y1 = (W1/W2)^(6/7) · [ V1² / (36·y1^(1/3)·d50^(2/3)) ]^(3/7)
+    d50 en METROS. Devuelve (y2, y2-y1).
+    """
+    d50_m = d50_mm / 1000.0
+    ratio = (W1 / W2) ** (6.0 / 7.0) * (
+        V1 ** 2 / (36.0 * y1 ** (1.0 / 3.0) * d50_m ** (2.0 / 3.0))) ** (3.0 / 7.0)
+    y2 = y1 * ratio
+    return y2, max(y2 - y1, 0.0)
+
+
 def parker_contraccion(y1, W1, W2):
-    """
-    Parker (1985) — cauces de grava, sin acorazamiento (conservadora).
-        y2 = y1 · (W1/W2)^0.825
-    """
+    """Parker (1985) — grava sin acorazamiento. y2 = y1·(W1/W2)^0.825."""
     y2 = y1 * (W1 / W2) ** 0.825
     return y2, max(y2 - y1, 0.0)
 
 
 def hec18_contraccion_agua_clara(Q2, dm_m, W2, Ku=0.025):
     """
-    Richardson & Davis / HEC-18 — contracción en agua clara (S.I.).
-
-    Forma completa de HEC-18 (la que devolvió el cuaderno vino truncada):
-        y2 = [ Ku · Q2² / (D_m^(2/3) · W2²) ]^(3/7)
-    con Ku = 0.025 (S.I.).
-    Q2 caudal en la contracción (m³/s) ; d_m en METROS ; W2 ancho (m).
-    Devuelve y2 (tirante tras la socavación, m).
-
-    NOTA: confirmar coeficiente y forma exacta contra el PDF de HEC-18.
+    Richardson & Davis / HEC-18 — agua clara (forma canónica, S.I.):
+        y2 = [ Ku · Q2² / (D_m^(2/3) · W2²) ]^(3/7),  Ku = 0.025, D_m en METROS.
+    Equivale a y2 = 1.48·[Q2/(d_m^(1/3)·W2)]^(6/7) con d_m en MILÍMETROS.
     """
     return (Ku * Q2 ** 2 / (dm_m ** (2.0 / 3.0) * W2 ** 2)) ** (3.0 / 7.0)
 
@@ -258,57 +308,75 @@ def hec18_contraccion_agua_clara(Q2, dm_m, W2, Ku=0.025):
 # 3. SOCAVACIÓN LOCAL EN PILAS
 # ===========================================================================
 
+def kd_pila(b, d50_mm):
+    """Kd (Ettema 1980) — tamaño relativo del sedimento, según b/d50.
+    b en metros, d50 en mm → relación adimensional b/d50 = (b·1000)/d50_mm."""
+    if d50_mm <= 0:
+        return 1.0
+    return _interp_table(_KD_ETTEMA, (b * 1000.0) / d50_mm)
+
+
+def k_esviaje_pila(theta_deg, largo_ancho):
+    """
+    Factor de esviaje Kω (Froehlich, Manual ABC):
+        Kω = (cos θ + (L/b)·sen θ)^0.62
+    theta en grados ; largo_ancho = L/b.
+    """
+    th = np.radians(theta_deg)
+    return (np.cos(th) + largo_ancho * np.sin(th)) ** 0.62
+
+
 def breusers_nicollet_shen(b, y, Ks=1.0, Ktheta=1.0):
-    """
-    Breusers, Nicollet & Shen (1977) — inicio del movimiento.
-        d_s = b · 2.00 · tanh(y/b) · Ks · Kθ
-    b = ancho de la pila (m) ; y = tirante (m).
-    """
+    """Breusers-Nicollet-Shen (1977): d_s = b·2.00·tanh(y/b)·Ks·Kθ."""
     return b * 2.00 * np.tanh(y / b) * Ks * Ktheta
 
 
-def csu_hec18_pila(a, y1, Fr1, K1=1.0, K2=1.0, K3=1.1, K4=1.0):
+def csu_hec18_pila(a, y1, Fr1, K1=1.0, K2=1.0, K3=1.1, K4=1.0, aplicar_tope=True):
     """
-    CSU / HEC-18 (Richardson & Davis, 1995) — método normativo.
-        y_s = 2.0 · K1·K2·K3·K4 · a^0.65 · y1^0.35 · Fr1^0.43
-    a = ancho de pila (m) ; y1 = calado aguas arriba (m) ; Fr1 = Froude.
+    CSU / HEC-18 (Richardson & Davis, 1995):
+        y_s = 2.0·K1·K2·K3·K4·a^0.65·y1^0.35·Fr1^0.43
+    Topes (Manual ABC): d_s,máx = 2.4a si Fr≤0.8 ; 3.0a si Fr>0.8.
     """
-    return 2.0 * K1 * K2 * K3 * K4 * a ** 0.65 * y1 ** 0.35 * Fr1 ** 0.43
-
-
-def k2_angulo_ataque(theta_deg, largo_ancho):
-    """
-    Factor K2 por ángulo de ataque (HEC-18):
-        K2 = (cos θ + (L/a)·sen θ)^0.65
-    theta en grados ; largo_ancho = L/a (largo de pila / ancho).
-    """
-    th = np.radians(theta_deg)
-    return (np.cos(th) + largo_ancho * np.sin(th)) ** 0.65
+    ys = 2.0 * K1 * K2 * K3 * K4 * a ** 0.65 * y1 ** 0.35 * Fr1 ** 0.43
+    if aplicar_tope:
+        tope = 2.4 * a if Fr1 <= 0.8 else 3.0 * a
+        ys = min(ys, tope)
+    return ys
 
 
 # ===========================================================================
 # 4. SOCAVACIÓN LOCAL EN ESTRIBOS
 # ===========================================================================
 
-def liu_dodge_skinner(L, y, Fr, spill_through=True):
+def froehlich_hec18_estribo(L, ya, Fr, Ks=1.0, Ktheta=1.0):
     """
-    Liu, Dodge & Skinner (1961) — lecho móvil.
-        spill-through (con talud): d_s = L · 1.10 · (y/L)^0.6 · Fr^0.33
-        vertical / con aletas:     d_s = L · 2.15 · (y/L)^0.6 · Fr^0.33
-    L = longitud del estribo proyectada al flujo (m).
+    Froehlich (1989a) / HEC-18 — el método recomendado (lecho móvil y agua
+    clara, no sobreestima):
+        d_s = L · 2.27·Ks·Kθ·(ya/L)^0.57·Fr^0.61
+    L longitud del estribo (m) ; ya tirante en la llanura (m) ; Fr = V/√(g·ya).
+    """
+    return L * 2.27 * Ks * Ktheta * (ya / L) ** 0.57 * Fr ** 0.61
+
+
+def liu_chang_skinner(L, y, Fr, spill_through=True):
+    """
+    Liu, Chang & Skinner (1961) — lecho móvil.
+        spill-through: d_s = L·1.10·(y/L)^0.6·Fr^0.33
+        vertical:      d_s = L·2.15·(y/L)^0.6·Fr^0.33
     """
     c = 1.10 if spill_through else 2.15
     return L * c * (y / L) ** 0.6 * Fr ** 0.33
 
 
 def laursen_estribo(L, y, agua_clara=False):
-    """
-    Laursen (1962/1963) — estribo sobre el cauce principal.
-        lecho móvil (1962): d_s = L · 1.57 · (y/L)^0.5
-        agua clara  (1963): d_s = L · 1.89 · (y/L)^0.5
-    """
+    """Laursen (1962/63): d_s = L·(1.57 lecho móvil | 1.89 agua clara)·(y/L)^0.5."""
     c = 1.89 if agua_clara else 1.57
     return L * c * (y / L) ** 0.5
+
+
+def ktheta_estribo(theta_deg):
+    """Factor Kθ por esviaje del estribo (Manual ABC, interpolado)."""
+    return _interp_table(_KTHETA_ESTRIBO, float(theta_deg))
 
 
 # ===========================================================================
@@ -328,26 +396,11 @@ def _row(metodo, valor, unidad, nota="", referencia=""):
 def compute_socavacion(params):
     """
     Calcula todos los métodos de socavación cuyos datos estén disponibles.
-
-    `params` (dict) puede contener:
-        d50_mm, d90_mm, dm_mm      granulometría
-        depth (y = Ho), velocity   hidráulica de campo
-        u_star, w (ws)             para el exponente de contracción
-        froude                     Froude de aproximación
-        Q                          caudal de diseño (m³/s)
-        B / W1                     ancho del espejo (m)
-        W2                         ancho contraído (m)
-        tr                         periodo de retorno (años)
-        cohesivo (bool), gamma_s   tipo de suelo
-        mu                         factor de contracción μ (default 1.0)
-        pila_ancho, pila_forma, pila_theta, pila_largo
-        estribo_L, estribo_spill (bool), estribo_agua_clara (bool)
-
-    Devuelve un dict con listas por tipo, listo para el frontend.
+    Ver README del módulo para la lista de claves de `params`.
     """
     d50 = params.get("d50_mm")
     d90 = params.get("d90_mm")
-    dm = params.get("dm_mm", d50)          # d_m ≈ d50 si no se da explícito
+    dm = params.get("dm_mm", d50)
     y = params.get("depth")
     v = params.get("velocity")
     Q = params.get("Q")
@@ -356,14 +409,23 @@ def compute_socavacion(params):
     tr = params.get("tr", 100)
     cohesivo = bool(params.get("cohesivo", False))
     gamma_s = params.get("gamma_s")
-    mu = params.get("mu", 1.0)
     u_star = params.get("u_star")
     w = params.get("w")
+    claro = params.get("claro_pilas")
+    gamma_mezcla = params.get("gamma_mezcla")
 
     out = {"general": [], "contraccion": [], "pila": [], "estribo": [],
            "yarnell": YARNELL_K, "avisos": []}
 
-    # Caudal unitario q (m³/s·m) — de Q/B si hay ambos, si no de v·y
+    # μ: de la tabla de Maza si hay V y claro entre pilas; si no, el dado o 1.0
+    if v and claro:
+        mu = mu_contraccion(v, claro)
+    else:
+        mu = params.get("mu", 1.0) or 1.0
+    # ψ: de la tabla si se da el peso de la mezcla; si no, 1.0
+    psi = psi_suspension(gamma_mezcla) if gamma_mezcla else 1.0
+
+    # Caudal unitario q (m³/s·m)
     q = None
     if Q and B and B > 0:
         q = Q / B
@@ -374,7 +436,7 @@ def compute_socavacion(params):
     if Q and dm:
         out["general"].append(_row(
             "Lacey (1930)", lacey(Q, dm), "m",
-            "Prof. media desde la superficie · d_m en mm", "Lacey 1930"))
+            "Prof. media desde superficie · d_m en mm", "Lacey 1930"))
     if q and d50:
         out["general"].append(_row(
             "Blench (1969)", blench(q, d50), "m",
@@ -382,16 +444,16 @@ def compute_socavacion(params):
     if Q and B and d50:
         out["general"].append(_row(
             "Maza & Echavarría (1973)", maza_echavarria(Q, B, d50 / 1000.0),
-            "m", "Calibrada en ríos sudamericanos · d50 en m", "Maza-Echavarría 1973"))
+            "m", "Calibrada en ríos sudamericanos", "Maza-Echavarría 1973"))
     if q and d50:
         out["general"].append(_row(
             "Lischtvan-Lebediev (reducida)",
             lischtvan_lebediev_reducida(q, d50 / 1000.0), "m",
-            "Rango de arenas · d50 en m", "Lischtvan-Lebediev"))
+            "Rango de arenas", "Lischtvan-Lebediev"))
     if q and d90:
         out["general"].append(_row(
             "Kellerhals", kellerhals(q, d90 / 1000.0), "m",
-            "Grava gruesa · d90 en m", "Kellerhals"))
+            "Grava gruesa · d90", "Kellerhals"))
 
     # Lischtvan-Lebediev / Maza completo (por franjas)
     if y and Q and B:
@@ -399,52 +461,72 @@ def compute_socavacion(params):
             beta = beta_periodo_retorno(tr)
             Hs, sc = lischtvan_lebediev_maza(
                 Ho=y, Hm=y, Q=Q, We=B, mu=mu, beta=beta,
-                cohesivo=cohesivo, dm_mm=dm, gamma_s=gamma_s)
+                cohesivo=cohesivo, dm_mm=dm, gamma_s=gamma_s, psi=psi)
             tipo = "cohesivo" if cohesivo else "no cohesivo"
+            extra = f" · μ={mu:.2f}" + (f" · ψ={psi:.2f}" if psi != 1.0 else "")
             out["general"].append(_row(
                 "Lischtvan-Lebediev / Maza (completo)", sc, "m",
                 f"Hs={Hs:.2f} m desde superficie · suelo {tipo} · β={beta:.2f}"
-                f" (Tr={tr} a) · μ={mu}", "Maza 1968"))
+                f" (Tr={tr} a){extra}", "Maza 1968"))
         except Exception as e:
             out["avisos"].append(f"L-L/Maza no calculable: {e}")
 
     # --- 2. CONTRACCIÓN ---
     if y and B and W2 and W2 > 0:
+        # Régimen: comparar V1 con V_c
+        regimen = None
+        if v and d50:
+            vc = velocidad_critica(y, d50)
+            regimen = "lecho vivo" if v >= vc else "agua clara"
+            out["contraccion"].append(_row(
+                "Régimen (V_c Laursen)", vc, "m/s",
+                f"V1={v:.2f} m/s vs V_c={vc:.2f} → {regimen}", "HEC-18"))
+        # Lecho vivo (Laursen)
         k1 = k1_contraccion(u_star or 0.0, w or 1.0)
         y2, sc = laursen_contraccion_lecho_vivo(y, B, W2, k1)
         out["contraccion"].append(_row(
             "Laursen (lecho vivo)", sc, "m",
-            f"y2={y2:.2f} m · k1={k1}", "Laursen"))
-        y2p, scp = parker_contraccion(y, B, W2)
-        out["contraccion"].append(_row(
-            "Parker (1985)", scp, "m",
-            f"y2={y2p:.2f} m · grava sin acorazar", "Parker 1985"))
-        if Q and dm:
-            y2c = hec18_contraccion_agua_clara(Q, dm / 1000.0, W2)
+            f"y2={y2:.2f} m · k1={k1}"
+            + (" ✓ aplica" if regimen == "lecho vivo" else ""), "Laursen"))
+        # Agua clara (Laursen, forma completa)
+        if v and d50:
+            y2c, scc = laursen_contraccion_agua_clara(y, B, W2, v, d50)
             out["contraccion"].append(_row(
-                "HEC-18 (agua clara)", max(y2c - y, 0.0), "m",
-                f"y2={y2c:.2f} m · d_m en m", "Richardson & Davis / HEC-18"))
+                "Laursen (agua clara)", scc, "m",
+                f"y2={y2c:.2f} m"
+                + (" ✓ aplica" if regimen == "agua clara" else ""), "Laursen"))
+        out["contraccion"].append(_row(
+            "Parker (1985)", parker_contraccion(y, B, W2)[1], "m",
+            "Grava sin acorazar", "Parker 1985"))
+        if Q and dm:
+            y2h = hec18_contraccion_agua_clara(Q, dm / 1000.0, W2)
+            out["contraccion"].append(_row(
+                "HEC-18 (agua clara)", max(y2h - y, 0.0), "m",
+                f"y2={y2h:.2f} m · Ku=0.025", "Richardson & Davis / HEC-18"))
 
     # --- 3. PILAS ---
     b = params.get("pila_ancho")
     if b and y:
         forma = params.get("pila_forma", "circular")
-        K1 = PIER_SHAPE_K1.get(forma, 1.0)
+        Ks = PIER_SHAPE_K1.get(forma, 1.0)
         theta = params.get("pila_theta", 0.0)
         largo = params.get("pila_largo")
-        K2 = 1.0
+        Kw = 1.0
         if theta and largo and b > 0:
-            K2 = k2_angulo_ataque(theta, largo / b)
+            Kw = k_esviaje_pila(theta, largo / b)
         K3 = PIER_BED_K3.get(params.get("pila_lecho", "plano"), 1.1)
         out["pila"].append(_row(
             "Breusers-Nicollet-Shen (1977)",
-            breusers_nicollet_shen(b, y, Ks=K1, Ktheta=1.0), "m",
-            f"Ks={K1} · forma {forma}", "Breusers et al. 1977"))
+            breusers_nicollet_shen(b, y, Ks=Ks, Ktheta=Kw), "m",
+            f"Ks={Ks} · Kω={Kw:.2f} · forma {forma}", "Breusers et al. 1977"))
         if params.get("froude"):
+            fr = params["froude"]
+            ys = csu_hec18_pila(b, y, fr, K1=Ks, K2=Kw, K3=K3)
+            tope = 2.4 * b if fr <= 0.8 else 3.0 * b
+            capped = " (limitado al tope)" if ys >= tope - 1e-9 else ""
             out["pila"].append(_row(
-                "CSU / HEC-18 (normativo)",
-                csu_hec18_pila(b, y, params["froude"], K1=K1, K2=K2, K3=K3),
-                "m", f"K1={K1} K2={K2:.2f} K3={K3} · Fr={params['froude']}",
+                "CSU / HEC-18 (normativo)", ys, "m",
+                f"Ks={Ks} Kω={Kw:.2f} K3={K3} · Fr={fr} · tope {tope:.2f} m{capped}",
                 "Richardson & Davis 1995 / HEC-18"))
 
     # --- 4. ESTRIBOS ---
@@ -452,12 +534,22 @@ def compute_socavacion(params):
     if L and y and L > 0:
         spill = bool(params.get("estribo_spill", True))
         agua_clara = bool(params.get("estribo_agua_clara", False))
+        forma_e = params.get("estribo_forma", "spill" if spill else "vertical")
+        Kse = ABUT_SHAPE_KS.get(forma_e, 0.55 if spill else 1.0)
+        theta_e = params.get("estribo_theta", 90)
+        Kte = ktheta_estribo(theta_e)
+        # Froehlich / HEC-18 (recomendado)
         if params.get("froude"):
+            fr = params["froude"]
             out["estribo"].append(_row(
-                "Liu-Dodge-Skinner (1961)",
-                liu_dodge_skinner(L, y, params["froude"], spill_through=spill),
-                "m", f"{'spill-through' if spill else 'vertical'} · lecho móvil",
-                "Liu et al. 1961"))
+                "Froehlich / HEC-18 (recomendado)",
+                froehlich_hec18_estribo(L, y, fr, Ks=Kse, Ktheta=Kte), "m",
+                f"Ks={Kse} · Kθ={Kte:.2f} · forma {forma_e}", "Froehlich 1989 / HEC-18"))
+            out["estribo"].append(_row(
+                "Liu-Chang-Skinner (1961)",
+                liu_chang_skinner(L, y, fr, spill_through=spill), "m",
+                f"{'spill-through' if spill else 'vertical'} · lecho móvil",
+                "Liu, Chang & Skinner 1961"))
         out["estribo"].append(_row(
             "Laursen (estribo)", laursen_estribo(L, y, agua_clara=agua_clara),
             "m", f"{'agua clara' if agua_clara else 'lecho móvil'}", "Laursen 1962/63"))

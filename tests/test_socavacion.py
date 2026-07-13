@@ -64,6 +64,49 @@ def test_k1_contraccion_por_modo_transporte():
     assert sc.k1_contraccion(0.30, 0.10) == 0.69   # > 2.0
 
 
+def test_beta_completa_maza():
+    # Maza p.9: Tr=1 (100% excedencia) -> 0.77 ; Tr=1000 -> 1.07
+    assert sc.beta_periodo_retorno(1) == pytest.approx(0.77, rel=1e-6)
+    assert sc.beta_periodo_retorno(1000) == pytest.approx(1.07, rel=1e-6)
+
+
+def test_exponente_x_cohesivo_completo():
+    # Maza p.10: γs=1.24 -> x=0.38 (fila que el manual ABC no tiene)
+    assert sc.exponente_x(gamma_s=1.24, cohesivo=True) == pytest.approx(0.38, rel=1e-6)
+    assert sc.exponente_x(gamma_s=2.00, cohesivo=True) == pytest.approx(0.27, rel=1e-6)
+
+
+def test_mu_contraccion_maza():
+    # V < 1 -> 1.00 ; celda directa (V=3.0, claro=10) = 0.89
+    assert sc.mu_contraccion(0.8, 30) == 1.00
+    assert sc.mu_contraccion(3.0, 10) == pytest.approx(0.89, rel=1e-6)
+    # celda corregida por OCR (V=2.0, claro=16) = 0.95 (no 0.97)
+    assert sc.mu_contraccion(2.0, 16) == pytest.approx(0.95, rel=1e-6)
+    # monotonía: μ crece con el claro libre
+    assert sc.mu_contraccion(3.0, 10) < sc.mu_contraccion(3.0, 200)
+
+
+def test_psi_suspension():
+    assert sc.psi_suspension(1.00) == pytest.approx(1.00, rel=1e-6)
+    assert sc.psi_suspension(1.40) == pytest.approx(1.60, rel=1e-6)
+    # ψ en el denominador reduce la socavación de L-L
+    _, sc_sin = sc.lischtvan_lebediev_maza(2.0, 2.0, 120.0, 40.0, 1.0, 1.0,
+                                           dm_mm=0.5, psi=1.0)
+    _, sc_con = sc.lischtvan_lebediev_maza(2.0, 2.0, 120.0, 40.0, 1.0, 1.0,
+                                           dm_mm=0.5, psi=1.3)
+    assert sc_con < sc_sin
+
+
+def test_velocidad_critica_regimen():
+    vc = sc.velocidad_critica(2.0, 0.5)   # y=2m, d50=0.5mm
+    assert 0.3 < vc < 1.0
+
+
+def test_laursen_agua_clara_forma_completa():
+    y2, socav = sc.laursen_contraccion_agua_clara(2.0, 40.0, 30.0, 0.6, 0.5)
+    assert y2 > 0 and socav >= 0
+
+
 # ── CONTRACCIÓN ─────────────────────────────────────────────────────────────
 
 def test_laursen_contraccion_estrecha_aumenta_socavacion():
@@ -99,9 +142,26 @@ def test_breusers_nicollet_shen():
 # ── ESTRIBOS ────────────────────────────────────────────────────────────────
 
 def test_liu_vertical_socava_mas_que_spill():
-    vert = sc.liu_dodge_skinner(8.0, 2.0, 0.34, spill_through=False)
-    spill = sc.liu_dodge_skinner(8.0, 2.0, 0.34, spill_through=True)
+    vert = sc.liu_chang_skinner(8.0, 2.0, 0.34, spill_through=False)
+    spill = sc.liu_chang_skinner(8.0, 2.0, 0.34, spill_through=True)
     assert vert > spill
+
+
+def test_froehlich_estribo():
+    ds = sc.froehlich_hec18_estribo(8.0, 2.0, 0.34, Ks=1.0, Ktheta=1.0)
+    assert ds > 0
+
+
+def test_ktheta_estribo():
+    assert sc.ktheta_estribo(90) == pytest.approx(1.00, rel=1e-6)
+    assert sc.ktheta_estribo(30) == pytest.approx(1.10, rel=1e-6)
+
+
+def test_csu_pila_tope():
+    # Fr alto y pila estrecha -> queda limitado al tope 3.0·b (Fr>0.8)
+    b = 1.0
+    ys = sc.csu_hec18_pila(b, 5.0, 1.2, K1=1.0, K3=1.3)
+    assert ys <= 3.0 * b + 1e-9
 
 
 def test_laursen_estribo_agua_clara_mayor():

@@ -209,6 +209,16 @@
               <input type="number" id="gamma_s" step="0.01" min="0" placeholder="1.4"
                 class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
             </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Claro entre pilas (m) <span class="text-slate-400">μ</span></label>
+              <input type="number" id="claro_pilas" step="0.1" min="0" placeholder="luz del vano"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">γ mezcla (t/m³) <span class="text-slate-400">ψ</span></label>
+              <input type="number" id="gamma_mezcla" step="0.01" min="1" placeholder="1.00–1.40"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
           </div>
 
           <div class="text-[11px] font-bold text-amber-700 uppercase mt-4 mb-1">Pila</div>
@@ -222,10 +232,14 @@
               <label class="block text-xs text-slate-500 mb-1">Forma nariz</label>
               <select id="pila_forma"
                 class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
-                <option value="circular">Circular / redondeada (K₁=1.0)</option>
-                <option value="cuadrada">Cuadrada (K₁=1.1)</option>
-                <option value="triangular">Triangular afilada (K₁=0.9)</option>
-                <option value="grupo_cilindros">Grupo de cilindros (K₁=1.0)</option>
+                <option value="circular">Circular (Ks=1.00)</option>
+                <option value="rectangular">Rectangular (Ks=1.10)</option>
+                <option value="rect_semicircular">Rect. + extremo semicircular (Ks=0.90)</option>
+                <option value="rect_redondeado">Rect. + extremo redondeado (Ks=1.01)</option>
+                <option value="semicircular_triangular">Nariz semicirc. + cola triangular (Ks=0.86)</option>
+                <option value="rect_triangular">Rect. + nariz triangular (Ks=0.70)</option>
+                <option value="lenticular">Lenticular (Ks=0.75)</option>
+                <option value="eliptica">Elíptica (Ks=0.70)</option>
               </select>
             </div>
             <div>
@@ -248,11 +262,29 @@
                 class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Tipo estribo</label>
-              <select id="estribo_tipo"
+              <label class="block text-xs text-slate-500 mb-1">Forma estribo (ABC)</label>
+              <select id="estribo_forma"
                 class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
-                <option value="spill">Con talud (spill-through)</option>
-                <option value="vertical">Vertical / con aletas</option>
+                <option value="vertical">Pared vertical (Ks=1.00)</option>
+                <option value="vertical_semicircular">Vertical + nariz semicircular (Ks=0.75)</option>
+                <option value="vertical_aletas">Vertical con aletas (Ks=0.75)</option>
+                <option value="talud_1_2" selected>Talud H:V 1:2 (Ks=0.60)</option>
+                <option value="talud_1_1">Talud H:V 1:1 (Ks=0.50)</option>
+                <option value="talud_15_1">Talud H:V 1.5:1 (Ks=0.45)</option>
+                <option value="talud_2_1">Talud H:V 2:1 (Ks=0.30)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Ángulo esviaje φ (°)</label>
+              <input type="number" id="estribo_theta" step="1" min="0" max="180" value="90"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Régimen estribo</label>
+              <select id="estribo_regimen"
+                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                <option value="movil">Lecho móvil</option>
+                <option value="clara">Agua clara</option>
               </select>
             </div>
           </div>
@@ -702,12 +734,17 @@ async function calculateAll() {
     periodo_retorno: document.getElementById('periodo_retorno').value,
     cohesivo:        document.getElementById('tipo_suelo').value === 'cohesivo',
     gamma_s:         document.getElementById('gamma_s').value,
+    claro_pilas:     document.getElementById('claro_pilas').value,
+    gamma_mezcla:    document.getElementById('gamma_mezcla').value,
     pila_ancho:      document.getElementById('pila_ancho').value,
     pila_forma:      document.getElementById('pila_forma').value,
     pila_theta:      document.getElementById('pila_theta').value,
     pila_largo:      document.getElementById('pila_largo').value,
     estribo_l:       document.getElementById('estribo_l').value,
-    estribo_spill:   document.getElementById('estribo_tipo').value === 'spill',
+    estribo_forma:   document.getElementById('estribo_forma').value,
+    estribo_theta:   document.getElementById('estribo_theta').value,
+    estribo_spill:   document.getElementById('estribo_forma').value.startsWith('talud'),
+    estribo_agua_clara: document.getElementById('estribo_regimen').value === 'clara',
   };
 
   try {
@@ -893,12 +930,17 @@ function generateReport() {
     periodo_retorno: document.getElementById('periodo_retorno').value,
     cohesivo:        document.getElementById('tipo_suelo').value === 'cohesivo' ? '1' : '',
     gamma_s:         document.getElementById('gamma_s').value,
+    claro_pilas:     document.getElementById('claro_pilas').value,
+    gamma_mezcla:    document.getElementById('gamma_mezcla').value,
     pila_ancho:      document.getElementById('pila_ancho').value,
     pila_forma:      document.getElementById('pila_forma').value,
     pila_theta:      document.getElementById('pila_theta').value,
     pila_largo:      document.getElementById('pila_largo').value,
     estribo_l:       document.getElementById('estribo_l').value,
-    estribo_spill:   document.getElementById('estribo_tipo').value === 'spill' ? '1' : '',
+    estribo_forma:   document.getElementById('estribo_forma').value,
+    estribo_theta:   document.getElementById('estribo_theta').value,
+    estribo_spill:   document.getElementById('estribo_forma').value.startsWith('talud') ? '1' : '',
+    estribo_agua_clara: document.getElementById('estribo_regimen').value === 'clara' ? '1' : '',
   });
   window.open('/report?' + p.toString(), '_blank');
 }
