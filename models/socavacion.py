@@ -138,6 +138,29 @@ _ARTAMONOV_PQ = {0.10: 2.00, 0.20: 2.65, 0.30: 3.22, 0.40: 3.45,
 # Pk — talud del estribo k (horizontal:vertical).
 _ARTAMONOV_PK = {0: 1.00, 0.5: 0.91, 1.0: 0.85, 1.5: 0.83, 2.0: 0.61, 3.0: 0.50}
 
+# ── LAURSEN-TOCH — pilas (Maza 1968, ec. 33-34, pp.59-64) ───────────────────
+# K2 — forma de la nariz (Tabla XII, p.59). TABLA REAL citable.
+# K1 (Fig.21) y K3 (Fig.22) son GRÁFICAS: el usuario debe ingresarlas leídas
+# del PDF (el cuaderno advirtió que los valores leídos por IA no cuadran).
+LAURSEN_TOCH_K2 = {
+    "rectangular": 1.00,          # a/b = 4
+    "semicircular": 0.90,
+    "circular": 0.90,             # nariz circular ≈ semicircular
+    "eliptica_2_1": 0.81,         # P/r = 2/1
+    "eliptica_3_1": 0.75,         # P/r = 3/1
+    "lenticular_2_1": 0.81,       # P/r = 2/1
+    "lenticular_3_1": 0.69,       # P/r = 3/1
+    "biselada": 0.78,             # a/b = 4 (Tison)
+    "hidrodinamico": 0.75,        # perfil hidrodinámico a/b = 4 (Tison)
+}
+# Mapeo desde las formas del formulario a la K2 de Laursen-Toch.
+_LT_K2_FROM_FORMA = {
+    "circular": 0.90, "rectangular": 1.00, "cuadrada": 1.00,
+    "rect_semicircular": 0.90, "rect_redondeado": 0.90,
+    "semicircular_triangular": 0.90, "rect_triangular": 0.78,
+    "lenticular": 0.81, "eliptica": 0.81, "grupo_cilindros": 0.90,
+}
+
 # ── YAROSLAVTZIEV — pilas (Maza 1968, ec. 35, pp.65-74) ─────────────────────
 # Kf — factor de forma de pila (valores tabulados del libro).
 _YAROS_KF = {
@@ -366,6 +389,20 @@ def csu_hec18_pila(a, y1, Fr1, K1=1.0, K2=1.0, K3=1.1, K4=1.0, aplicar_tope=True
         tope = 2.4 * a if Fr1 <= 0.8 else 3.0 * a
         ys = min(ys, tope)
     return ys
+
+
+def laursen_toch(b, K1, K2=1.0, K3=None, esviaje=False):
+    """
+    Laursen-Toch (Maza 1968, ec.33-34) — socavación local en pila (medida
+    desde el fondo ya erosionado por socavación general):
+        pila alineada:  S_o = K1·K2·b
+        pila esviajada: S   = K1·K3·b
+    b = ancho de pila (m). K2 = forma de la nariz (tabla real). K1 (Fig.21) y
+    K3 (Fig.22) son GRÁFICAS → deben ingresarse leídas del PDF de Maza.
+    """
+    if esviaje and K3 is not None:
+        return K1 * K3 * b
+    return K1 * K2 * b
 
 
 def yaroslavtziev(V, b1, H, Kf, D85_m=0.0, C=0.6):
@@ -613,6 +650,18 @@ def compute_socavacion(params):
                 f"Kf={Kf} · b1={b1:.2f} m · C={C} ({zona})"
                 + (" · D85≈d90" if d85_m >= 0.005 else " · arena (sin −30·D85)"),
                 "Yaroslavtziev / Maza 1968"))
+        # Laursen-Toch (Maza) — requiere K1 leído de la Fig.21 (gráfica)
+        k1_lt = params.get("pila_k1")
+        if k1_lt:
+            K2 = _LT_K2_FROM_FORMA.get(forma, 1.0)
+            k3_lt = params.get("pila_k3")
+            esv = bool(k3_lt) and bool(theta)
+            slt = laursen_toch(b, k1_lt, K2=K2, K3=k3_lt, esviaje=esv)
+            modo = "esviajada (K1·K3·b)" if esv else "alineada (K1·K2·b)"
+            out["pila"].append(_row(
+                "Laursen-Toch (Maza)", slt, "m",
+                f"K1={k1_lt} (Fig.21) · K2={K2} · forma {forma} · {modo}",
+                "Laursen-Toch / Maza 1968"))
 
     # --- 4. ESTRIBOS ---
     L = params.get("estribo_L")

@@ -164,6 +164,28 @@ def test_csu_pila_tope():
     assert ys <= 3.0 * b + 1e-9
 
 
+def test_laursen_toch_alineada():
+    # S_o = K1·K2·b ; K1=1.5 (Fig.21), K2=1.0 (rectangular), b=1.5
+    assert sc.laursen_toch(1.5, K1=1.5, K2=1.0) == pytest.approx(2.25, rel=1e-6)
+
+
+def test_laursen_toch_esviajada_usa_k3():
+    # con esviaje y K3 dado -> S = K1·K3·b
+    s = sc.laursen_toch(1.5, K1=1.5, K2=1.0, K3=2.0, esviaje=True)
+    assert s == pytest.approx(1.5 * 2.0 * 1.5, rel=1e-6)
+
+
+def test_laursen_toch_en_orquestador_requiere_k1():
+    base = dict(depth=2.0, velocity=1.5, pila_ancho=1.5, pila_forma="rectangular",
+                froude=0.34)
+    sin_k1 = sc.compute_socavacion(base)
+    con_k1 = sc.compute_socavacion({**base, "pila_k1": 1.5})
+    metodos_sin = [r["metodo"] for r in sin_k1["pila"]]
+    metodos_con = [r["metodo"] for r in con_k1["pila"]]
+    assert not any("Laursen-Toch" in m for m in metodos_sin)
+    assert any("Laursen-Toch" in m for m in metodos_con)
+
+
 def test_artamonov():
     # Caso especial: estribo recto y vertical (α=90, k=0) -> S_T = Pq·Ho
     St, socav = sc.artamonov(Ho=2.0, Q1_Q=0.30, alpha=90, k=0.0)

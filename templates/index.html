@@ -249,7 +249,17 @@
             </div>
             <div>
               <label class="block text-xs text-slate-500 mb-1">Largo pila L (m)</label>
-              <input type="number" id="pila_largo" step="0.1" min="0" placeholder="para K₂"
+              <input type="number" id="pila_largo" step="0.1" min="0" placeholder="para K₂/Kω"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">K₁ Laursen-Toch <span class="text-slate-400">Fig.21</span></label>
+              <input type="number" id="pila_k1" step="0.01" min="0" placeholder="leído del PDF"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">K₃ Laursen-Toch <span class="text-slate-400">Fig.22, esviaje</span></label>
+              <input type="number" id="pila_k3" step="0.01" min="0" placeholder="opcional"
                 class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
             </div>
           </div>
@@ -748,6 +758,8 @@ async function calculateAll() {
     pila_forma:      document.getElementById('pila_forma').value,
     pila_theta:      document.getElementById('pila_theta').value,
     pila_largo:      document.getElementById('pila_largo').value,
+    pila_k1:         document.getElementById('pila_k1').value,
+    pila_k3:         document.getElementById('pila_k3').value,
     estribo_l:       document.getElementById('estribo_l').value,
     estribo_forma:   document.getElementById('estribo_forma').value,
     estribo_theta:   document.getElementById('estribo_theta').value,
@@ -945,6 +957,8 @@ function generateReport() {
     pila_forma:      document.getElementById('pila_forma').value,
     pila_theta:      document.getElementById('pila_theta').value,
     pila_largo:      document.getElementById('pila_largo').value,
+    pila_k1:         document.getElementById('pila_k1').value,
+    pila_k3:         document.getElementById('pila_k3').value,
     estribo_l:       document.getElementById('estribo_l').value,
     estribo_forma:   document.getElementById('estribo_forma').value,
     estribo_theta:   document.getElementById('estribo_theta').value,
