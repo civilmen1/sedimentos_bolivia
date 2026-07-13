@@ -161,6 +161,29 @@ _LT_K2_FROM_FORMA = {
     "lenticular": 0.81, "eliptica": 0.81, "grupo_cilindros": 0.90,
 }
 
+# K1 = s/b en función de h/b (tirante/ancho de pila) — Fig.21 del PDF de Maza,
+# curva digitalizada directamente de la imagen (Laursen-Toch).
+_LT_K1_CURVE = {
+    0.1: 0.50, 0.25: 0.85, 0.5: 1.10, 0.75: 1.32, 1.0: 1.50,
+    1.5: 1.72, 2.0: 1.90, 2.5: 2.03, 3.0: 2.15, 3.5: 2.25,
+    4.0: 2.33, 4.5: 2.40, 5.0: 2.45,
+}
+
+# K3 (factor de esviaje) vs ángulo de incidencia φ para cada a/b — Fig.22,
+# familia de curvas digitalizada de la imagen. Filas = a/b, columnas = φ.
+_LT_K3_PHI = [0, 15, 30, 45, 60, 75, 90]
+_LT_K3_AB = [2, 4, 6, 8, 10, 12, 14, 16]
+_LT_K3_MATRIX = [
+    [1.0, 1.15, 1.30, 1.45, 1.58, 1.70, 1.80],   # a/b = 2
+    [1.0, 1.35, 1.70, 2.00, 2.25, 2.40, 2.50],   # a/b = 4
+    [1.0, 1.50, 2.00, 2.40, 2.75, 3.05, 3.30],   # a/b = 6
+    [1.0, 1.70, 2.35, 2.85, 3.30, 3.70, 4.10],   # a/b = 8
+    [1.0, 1.90, 2.70, 3.35, 3.90, 4.45, 4.90],   # a/b = 10
+    [1.0, 2.10, 3.00, 3.80, 4.50, 5.05, 5.50],   # a/b = 12
+    [1.0, 2.30, 3.30, 4.25, 5.05, 5.70, 6.30],   # a/b = 14
+    [1.0, 2.50, 3.70, 4.70, 5.60, 6.35, 6.90],   # a/b = 16
+]
+
 # ── YAROSLAVTZIEV — pilas (Maza 1968, ec. 35, pp.65-74) ─────────────────────
 # Kf — factor de forma de pila (valores tabulados del libro).
 _YAROS_KF = {
@@ -373,6 +396,54 @@ def k_esviaje_pila(theta_deg, largo_ancho):
     return (np.cos(th) + largo_ancho * np.sin(th)) ** 0.62
 
 
+def k2_csu_hec18(theta_deg, largo_ancho):
+    """
+    Factor K2 de ángulo de ataque (CSU / HEC-18, doc oficial USACE HEC-RAS):
+        K2 = (cos θ + (L/a)·sen θ)^0.65   con L/a acotado a ≤ 12.
+    theta en grados ; largo_ancho = L/a (largo de pila / ancho).
+    """
+    la = min(float(largo_ancho), 12.0)
+    th = np.radians(theta_deg)
+    return (np.cos(th) + la * np.sin(th)) ** 0.65
+
+
+def k4_armor(V1, y1, a, d50_mm, d95_mm):
+    """
+    Factor K4 de acorazamiento (CSU / HEC-18, doc oficial USACE HEC-RAS).
+
+    Solo se activa si D50 ≥ 2 mm Y D95 ≥ 20 mm; en cualquier otro caso K4 = 1.0.
+    Cuando aplica:
+        V_cDx  = 6.19·y1^(1/6)·Dx^(1/3)          (velocidad crítica del grano Dx)
+        V_icDx = 0.645·(Dx/a)^0.053·V_cDx        (velocidad de inicio de socavación)
+        V_R    = (V1 − V_icD50) / (V_cD50 − V_icD95)   (≥ 0)
+        K4     = 0.4·V_R^0.15,  con piso K4 ≥ 0.4
+
+    V1 (m/s), y1 (m), a ancho de pila (m), D50/D95 (mm).
+    """
+    if d50_mm < 2.0 or d95_mm < 20.0:
+        return 1.0
+    d50_m = d50_mm / 1000.0
+    d95_m = d95_mm / 1000.0
+
+    def _vc(dx_m):
+        return 6.19 * y1 ** (1.0 / 6.0) * dx_m ** (1.0 / 3.0)
+
+    def _vic(dx_m, vc):
+        return 0.645 * (dx_m / a) ** 0.053 * vc
+
+    vc50 = _vc(d50_m)
+    vc95 = _vc(d95_m)
+    vic50 = _vic(d50_m, vc50)
+    vic95 = _vic(d95_m, vc95)
+    denom = vc50 - vic95
+    if denom <= 0:
+        return 1.0
+    v_r = (V1 - vic50) / denom
+    if v_r <= 0:
+        return 0.4
+    return max(0.4 * v_r ** 0.15, 0.4)
+
+
 def breusers_nicollet_shen(b, y, Ks=1.0, Ktheta=1.0):
     """Breusers-Nicollet-Shen (1977): d_s = b·2.00·tanh(y/b)·Ks·Kθ."""
     return b * 2.00 * np.tanh(y / b) * Ks * Ktheta
@@ -389,6 +460,20 @@ def csu_hec18_pila(a, y1, Fr1, K1=1.0, K2=1.0, K3=1.1, K4=1.0, aplicar_tope=True
         tope = 2.4 * a if Fr1 <= 0.8 else 3.0 * a
         ys = min(ys, tope)
     return ys
+
+
+def laursen_toch_k1(h_b):
+    """K1 = s/b de Laursen-Toch (Fig.21 de Maza), según h/b = tirante/ancho."""
+    return _interp_table(_LT_K1_CURVE, float(h_b))
+
+
+def laursen_toch_k3(phi_deg, a_b):
+    """
+    K3 (factor de esviaje) de Laursen-Toch (Fig.22 de Maza), interpolación
+    bilineal según ángulo de incidencia φ (°) y a/b (largo/ancho de pila).
+    """
+    col_vals = [float(np.interp(phi_deg, _LT_K3_PHI, fila)) for fila in _LT_K3_MATRIX]
+    return float(np.interp(a_b, _LT_K3_AB, col_vals))
 
 
 def laursen_toch(b, K1, K2=1.0, K3=None, esviaje=False):
@@ -626,13 +711,21 @@ def compute_socavacion(params):
             f"Ks={Ks} · Kω={Kw:.2f} · forma {forma}", "Breusers et al. 1977"))
         if params.get("froude"):
             fr = params["froude"]
-            ys = csu_hec18_pila(b, y, fr, K1=Ks, K2=Kw, K3=K3)
+            # K2 CSU (exponente 0.65, L/a ≤ 12); K1→1.0 si el ataque supera 5°;
+            # K4 acorazamiento (solo D50≥2mm y D95≥20mm). Guardas doc USACE HEC-RAS.
+            K2c = k2_csu_hec18(theta, largo / b) if (theta and largo and b > 0) else 1.0
+            K1c = 1.0 if theta and theta > 5 else Ks
+            d95 = params.get("d95_mm") or d90
+            K4c = k4_armor(v, y, b, d50, d95) if (v and d50 and d95) else 1.0
+            ys = csu_hec18_pila(b, y, fr, K1=K1c, K2=K2c, K3=K3, K4=K4c)
             tope = 2.4 * b if fr <= 0.8 else 3.0 * b
             capped = " (limitado al tope)" if ys >= tope - 1e-9 else ""
+            k1nota = "K1=1.0 (θ>5°)" if (theta and theta > 5) else f"K1={K1c}"
+            k4nota = f" K4={K4c:.2f}" if K4c != 1.0 else ""
             out["pila"].append(_row(
                 "CSU / HEC-18 (normativo)", ys, "m",
-                f"Ks={Ks} Kω={Kw:.2f} K3={K3} · Fr={fr} · tope {tope:.2f} m{capped}",
-                "Richardson & Davis 1995 / HEC-18"))
+                f"{k1nota} K2={K2c:.2f} K3={K3}{k4nota} · Fr={fr} · tope {tope:.2f} m{capped}",
+                "Richardson & Davis / HEC-18 (USACE)"))
         # Yaroslavtziev (Maza) — requiere velocidad
         if v:
             Kf = _YAROS_KF.get(forma, 10.0)
@@ -650,18 +743,25 @@ def compute_socavacion(params):
                 f"Kf={Kf} · b1={b1:.2f} m · C={C} ({zona})"
                 + (" · D85≈d90" if d85_m >= 0.005 else " · arena (sin −30·D85)"),
                 "Yaroslavtziev / Maza 1968"))
-        # Laursen-Toch (Maza) — requiere K1 leído de la Fig.21 (gráfica)
-        k1_lt = params.get("pila_k1")
-        if k1_lt:
+        # Laursen-Toch (Maza) — K1 y K3 se leen de las curvas digitalizadas
+        # (Figs. 21 y 22); se puede sobreescribir con pila_k1 / pila_k3.
+        h_b = y / b
+        k1_lt = params.get("pila_k1") or laursen_toch_k1(h_b)
+        k1_src = "manual" if params.get("pila_k1") else f"Fig.21, h/b={h_b:.1f}"
+        if theta and largo and b > 0:
+            a_b = largo / b
+            k3_lt = params.get("pila_k3") or laursen_toch_k3(theta, a_b)
+            k3_src = "manual" if params.get("pila_k3") else f"Fig.22, φ={theta:g}°, a/b={a_b:.1f}"
+            slt = laursen_toch(b, k1_lt, K3=k3_lt, esviaje=True)
+            nota = (f"K1={k1_lt:.2f} ({k1_src}) · K3={k3_lt:.2f} ({k3_src}) · "
+                    "esviajada (K1·K3·b)")
+        else:
             K2 = _LT_K2_FROM_FORMA.get(forma, 1.0)
-            k3_lt = params.get("pila_k3")
-            esv = bool(k3_lt) and bool(theta)
-            slt = laursen_toch(b, k1_lt, K2=K2, K3=k3_lt, esviaje=esv)
-            modo = "esviajada (K1·K3·b)" if esv else "alineada (K1·K2·b)"
-            out["pila"].append(_row(
-                "Laursen-Toch (Maza)", slt, "m",
-                f"K1={k1_lt} (Fig.21) · K2={K2} · forma {forma} · {modo}",
-                "Laursen-Toch / Maza 1968"))
+            slt = laursen_toch(b, k1_lt, K2=K2)
+            nota = (f"K1={k1_lt:.2f} ({k1_src}) · K2={K2} · forma {forma} · "
+                    "alineada (K1·K2·b)")
+        out["pila"].append(_row(
+            "Laursen-Toch (Maza)", slt, "m", nota, "Laursen-Toch / Maza 1968"))
 
     # --- 4. ESTRIBOS ---
     L = params.get("estribo_L")
