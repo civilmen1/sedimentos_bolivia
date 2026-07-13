@@ -164,6 +164,36 @@ def test_csu_pila_tope():
     assert ys <= 3.0 * b + 1e-9
 
 
+def test_k2_csu_cap_la_12():
+    # L/a por encima de 12 se acota a 12 (doc USACE HEC-RAS)
+    k2_15 = sc.k2_csu_hec18(30, 15)
+    k2_12 = sc.k2_csu_hec18(30, 12)
+    assert k2_15 == pytest.approx(k2_12, rel=1e-9)
+    # alineado (θ=0) -> K2 = 1.0
+    assert sc.k2_csu_hec18(0, 8) == pytest.approx(1.0, rel=1e-9)
+
+
+def test_k4_armor_inactivo_en_arena():
+    # D50 < 2mm o D95 < 20mm -> K4 = 1.0
+    assert sc.k4_armor(2.0, 3.0, 1.5, d50_mm=0.5, d95_mm=2.0) == 1.0
+    assert sc.k4_armor(2.0, 3.0, 1.5, d50_mm=3.0, d95_mm=10.0) == 1.0
+
+
+def test_k4_armor_activo_en_grava_con_piso():
+    # D50>=2mm y D95>=20mm -> K4 puede reducir, con piso 0.4
+    k4 = sc.k4_armor(2.5, 3.0, 1.5, d50_mm=5.0, d95_mm=30.0)
+    assert 0.4 <= k4 <= 1.0
+
+
+def test_csu_theta_mayor_5_fuerza_k1_1():
+    # En el orquestador, θ>5° debe forzar K1=1.0 (no la forma)
+    r = sc.compute_socavacion(dict(depth=2.0, velocity=1.5, d50_mm=0.5,
+                                    pila_ancho=1.5, pila_forma="rectangular",
+                                    pila_theta=10, pila_largo=6.0, froude=0.34))
+    csu = [x for x in r["pila"] if "CSU" in x["metodo"]][0]
+    assert "K1=1.0 (θ>5°)" in csu["nota"]
+
+
 def test_laursen_toch_alineada():
     # S_o = K1·K2·b ; K1=1.5 (Fig.21), K2=1.0 (rectangular), b=1.5
     assert sc.laursen_toch(1.5, K1=1.5, K2=1.0) == pytest.approx(2.25, rel=1e-6)

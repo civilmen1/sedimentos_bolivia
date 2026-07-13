@@ -373,6 +373,54 @@ def k_esviaje_pila(theta_deg, largo_ancho):
     return (np.cos(th) + largo_ancho * np.sin(th)) ** 0.62
 
 
+def k2_csu_hec18(theta_deg, largo_ancho):
+    """
+    Factor K2 de ángulo de ataque (CSU / HEC-18, doc oficial USACE HEC-RAS):
+        K2 = (cos θ + (L/a)·sen θ)^0.65   con L/a acotado a ≤ 12.
+    theta en grados ; largo_ancho = L/a (largo de pila / ancho).
+    """
+    la = min(float(largo_ancho), 12.0)
+    th = np.radians(theta_deg)
+    return (np.cos(th) + la * np.sin(th)) ** 0.65
+
+
+def k4_armor(V1, y1, a, d50_mm, d95_mm):
+    """
+    Factor K4 de acorazamiento (CSU / HEC-18, doc oficial USACE HEC-RAS).
+
+    Solo se activa si D50 ≥ 2 mm Y D95 ≥ 20 mm; en cualquier otro caso K4 = 1.0.
+    Cuando aplica:
+        V_cDx  = 6.19·y1^(1/6)·Dx^(1/3)          (velocidad crítica del grano Dx)
+        V_icDx = 0.645·(Dx/a)^0.053·V_cDx        (velocidad de inicio de socavación)
+        V_R    = (V1 − V_icD50) / (V_cD50 − V_icD95)   (≥ 0)
+        K4     = 0.4·V_R^0.15,  con piso K4 ≥ 0.4
+
+    V1 (m/s), y1 (m), a ancho de pila (m), D50/D95 (mm).
+    """
+    if d50_mm < 2.0 or d95_mm < 20.0:
+        return 1.0
+    d50_m = d50_mm / 1000.0
+    d95_m = d95_mm / 1000.0
+
+    def _vc(dx_m):
+        return 6.19 * y1 ** (1.0 / 6.0) * dx_m ** (1.0 / 3.0)
+
+    def _vic(dx_m, vc):
+        return 0.645 * (dx_m / a) ** 0.053 * vc
+
+    vc50 = _vc(d50_m)
+    vc95 = _vc(d95_m)
+    vic50 = _vic(d50_m, vc50)
+    vic95 = _vic(d95_m, vc95)
+    denom = vc50 - vic95
+    if denom <= 0:
+        return 1.0
+    v_r = (V1 - vic50) / denom
+    if v_r <= 0:
+        return 0.4
+    return max(0.4 * v_r ** 0.15, 0.4)
+
+
 def breusers_nicollet_shen(b, y, Ks=1.0, Ktheta=1.0):
     """Breusers-Nicollet-Shen (1977): d_s = b·2.00·tanh(y/b)·Ks·Kθ."""
     return b * 2.00 * np.tanh(y / b) * Ks * Ktheta
@@ -626,13 +674,21 @@ def compute_socavacion(params):
             f"Ks={Ks} · Kω={Kw:.2f} · forma {forma}", "Breusers et al. 1977"))
         if params.get("froude"):
             fr = params["froude"]
-            ys = csu_hec18_pila(b, y, fr, K1=Ks, K2=Kw, K3=K3)
+            # K2 CSU (exponente 0.65, L/a ≤ 12); K1→1.0 si el ataque supera 5°;
+            # K4 acorazamiento (solo D50≥2mm y D95≥20mm). Guardas doc USACE HEC-RAS.
+            K2c = k2_csu_hec18(theta, largo / b) if (theta and largo and b > 0) else 1.0
+            K1c = 1.0 if theta and theta > 5 else Ks
+            d95 = params.get("d95_mm") or d90
+            K4c = k4_armor(v, y, b, d50, d95) if (v and d50 and d95) else 1.0
+            ys = csu_hec18_pila(b, y, fr, K1=K1c, K2=K2c, K3=K3, K4=K4c)
             tope = 2.4 * b if fr <= 0.8 else 3.0 * b
             capped = " (limitado al tope)" if ys >= tope - 1e-9 else ""
+            k1nota = "K1=1.0 (θ>5°)" if (theta and theta > 5) else f"K1={K1c}"
+            k4nota = f" K4={K4c:.2f}" if K4c != 1.0 else ""
             out["pila"].append(_row(
                 "CSU / HEC-18 (normativo)", ys, "m",
-                f"Ks={Ks} Kω={Kw:.2f} K3={K3} · Fr={fr} · tope {tope:.2f} m{capped}",
-                "Richardson & Davis 1995 / HEC-18"))
+                f"{k1nota} K2={K2c:.2f} K3={K3}{k4nota} · Fr={fr} · tope {tope:.2f} m{capped}",
+                "Richardson & Davis / HEC-18 (USACE)"))
         # Yaroslavtziev (Maza) — requiere velocidad
         if v:
             Kf = _YAROS_KF.get(forma, 10.0)
