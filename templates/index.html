@@ -166,6 +166,154 @@
           {% endif %}
         </fieldset>
 
+        <!-- Socavación (opcional) -->
+        <details class="border border-amber-200 rounded-xl p-4 bg-amber-50/40 mb-5">
+          <summary class="text-xs font-bold text-amber-700 uppercase cursor-pointer select-none">
+            ⚠ Socavación en puentes (opcional)
+          </summary>
+          <p class="text-[11px] text-slate-500 mt-2 mb-3 leading-snug">
+            Complete solo los campos que necesite. Cada método se calcula si tiene sus datos.
+          </p>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Caudal Q (m³/s)</label>
+              <input type="number" id="caudal" step="0.1" min="0" placeholder="p.ej. 120"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Ancho cauce B (m)</label>
+              <input type="number" id="ancho_b" step="0.1" min="0" placeholder="espejo de agua"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Ancho contraído W₂ (m)</label>
+              <input type="number" id="ancho_w2" step="0.1" min="0" placeholder="bajo el puente"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Periodo retorno Tr (años)</label>
+              <input type="number" id="periodo_retorno" step="1" min="1" value="100"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Tipo de suelo</label>
+              <select id="tipo_suelo"
+                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                <option value="no_cohesivo">No cohesivo (arenas/gravas)</option>
+                <option value="cohesivo">Cohesivo</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">γs seco (t/m³) <span class="text-slate-400">cohesivo</span></label>
+              <input type="number" id="gamma_s" step="0.01" min="0" placeholder="1.4"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Claro entre pilas (m) <span class="text-slate-400">μ</span></label>
+              <input type="number" id="claro_pilas" step="0.1" min="0" placeholder="luz del vano"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">γ mezcla (t/m³) <span class="text-slate-400">ψ</span></label>
+              <input type="number" id="gamma_mezcla" step="0.01" min="1" placeholder="1.00–1.40"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+          </div>
+          {% if gee_available %}
+          <button type="button" id="channelWidthBtn" onclick="fetchChannelWidth()"
+            class="mt-3 w-full text-xs bg-sky-100 hover:bg-sky-200 text-sky-800 font-semibold py-2 rounded-lg transition">
+            🛰 Estimar ancho B desde GEE (JRC Global Surface Water)
+          </button>
+          <p class="mt-1 text-[10px] text-slate-400 leading-snug">
+            Aproximación multitemporal en el punto del mapa. No resuelve cauces &lt; ~30 m; verificar con levantamiento.
+          </p>
+          {% endif %}
+
+          <div class="text-[11px] font-bold text-amber-700 uppercase mt-4 mb-1">Pila</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Ancho pila b (m)</label>
+              <input type="number" id="pila_ancho" step="0.05" min="0" placeholder="p.ej. 1.5"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Forma nariz</label>
+              <select id="pila_forma"
+                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                <option value="circular">Circular (Ks=1.00)</option>
+                <option value="rectangular">Rectangular (Ks=1.10)</option>
+                <option value="rect_semicircular">Rect. + extremo semicircular (Ks=0.90)</option>
+                <option value="rect_redondeado">Rect. + extremo redondeado (Ks=1.01)</option>
+                <option value="semicircular_triangular">Nariz semicirc. + cola triangular (Ks=0.86)</option>
+                <option value="rect_triangular">Rect. + nariz triangular (Ks=0.70)</option>
+                <option value="lenticular">Lenticular (Ks=0.75)</option>
+                <option value="eliptica">Elíptica (Ks=0.70)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Ángulo ataque θ (°)</label>
+              <input type="number" id="pila_theta" step="1" min="0" max="90" value="0"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Largo pila L (m)</label>
+              <input type="number" id="pila_largo" step="0.1" min="0" placeholder="para K₂/Kω"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">K₁ Laursen-Toch <span class="text-slate-400">Fig.21</span></label>
+              <input type="number" id="pila_k1" step="0.01" min="0" placeholder="leído del PDF"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">K₃ Laursen-Toch <span class="text-slate-400">Fig.22, esviaje</span></label>
+              <input type="number" id="pila_k3" step="0.01" min="0" placeholder="opcional"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+          </div>
+
+          <div class="text-[11px] font-bold text-amber-700 uppercase mt-4 mb-1">Estribo</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Longitud estribo L (m)</label>
+              <input type="number" id="estribo_l" step="0.1" min="0" placeholder="proyectada al flujo"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Forma estribo (ABC)</label>
+              <select id="estribo_forma"
+                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                <option value="vertical">Pared vertical (Ks=1.00)</option>
+                <option value="vertical_semicircular">Vertical + nariz semicircular (Ks=0.75)</option>
+                <option value="vertical_aletas">Vertical con aletas (Ks=0.75)</option>
+                <option value="talud_1_2" selected>Talud H:V 1:2 (Ks=0.60)</option>
+                <option value="talud_1_1">Talud H:V 1:1 (Ks=0.50)</option>
+                <option value="talud_15_1">Talud H:V 1.5:1 (Ks=0.45)</option>
+                <option value="talud_2_1">Talud H:V 2:1 (Ks=0.30)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Ángulo esviaje φ (°)</label>
+              <input type="number" id="estribo_theta" step="1" min="0" max="180" value="90"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Régimen estribo</label>
+              <select id="estribo_regimen"
+                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+                <option value="movil">Lecho móvil</option>
+                <option value="clara">Agua clara</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs text-slate-500 mb-1">Relación Q₁/Q <span class="text-slate-400">Artamonov</span></label>
+              <input type="number" id="estribo_q1q" step="0.01" min="0.1" max="0.8" placeholder="0.10–0.80"
+                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+            </div>
+          </div>
+        </details>
+
         <!-- Calculate button -->
         <button id="calcBtn" onclick="calculateAll()"
           class="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700
@@ -402,6 +550,21 @@
       </div>
     </div>
 
+    <!-- Socavación (shown only when methods computed) -->
+    <div id="scourSection" class="hidden bg-white rounded-xl border border-amber-200 p-5 anim">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="text-xs font-bold text-amber-700 uppercase">⚠ Socavación en Puentes</span>
+      </div>
+      <p class="text-[11px] text-slate-400 mb-4">
+        Profundidades por método. General/contracción = descenso del fondo; pila/estribo = socavación local al pie.
+      </p>
+      <div class="grid md:grid-cols-2 gap-4" id="scourGrid"></div>
+      <div id="scourAvisos" class="mt-3 text-[11px] text-amber-600"></div>
+      <p class="mt-3 text-[11px] text-slate-400 leading-snug border-t border-slate-100 pt-2">
+        🛰 <strong>Nota sobre percepción remota:</strong> la socavación no se mide con satélite — los sensores ópticos solo ven la superficie del agua. GEE aporta <em>insumos</em> (ancho B, W₁/W₂, pendiente S, cobertura), pero la profundidad de la fosa se verifica con batimetría o ecosonda.
+      </p>
+    </div>
+
     <!-- GEE maps (shown only when GEE active) -->
     <div id="geeSection" class="hidden bg-white rounded-xl border border-slate-200 p-5 anim">
       <div class="text-xs font-bold text-slate-600 uppercase mb-4">Datos Geoespaciales — Google Earth Engine</div>
@@ -571,6 +734,31 @@ async function fetchGEEData() {
   }
 }
 
+// ── ANCHO DEL CAUCE DESDE GEE ────────────────────────────────────────────────
+async function fetchChannelWidth() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lon = parseFloat(document.getElementById('lon').value);
+  const btn = document.getElementById('channelWidthBtn');
+  const prev = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '🛰 Consultando GEE…'; }
+  try {
+    const resp = await fetch('/channel_width', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon })
+    });
+    const d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    document.getElementById('ancho_b').value = d.width_m;
+    alert(`Ancho de cauce estimado (GEE): B ≈ ${d.width_m} m\n` +
+          `Semi-anchura: ${d.half_width_m} m\n\nFuente: ${d.source}\n\n${d.note}`);
+  } catch (e) {
+    alert('No se pudo estimar el ancho: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = prev; }
+  }
+}
+
 // ── MAIN CALCULATE ───────────────────────────────────────────────────────────
 async function calculateAll() {
   const btn = document.getElementById('calcBtn');
@@ -591,6 +779,27 @@ async function calculateAll() {
     velocity: document.getElementById('velocity').value,
     slope:    document.getElementById('slope').value,
     use_gee:  false,
+    // Socavación (opcional)
+    caudal:          document.getElementById('caudal').value,
+    ancho_b:         document.getElementById('ancho_b').value,
+    ancho_w2:        document.getElementById('ancho_w2').value,
+    periodo_retorno: document.getElementById('periodo_retorno').value,
+    cohesivo:        document.getElementById('tipo_suelo').value === 'cohesivo',
+    gamma_s:         document.getElementById('gamma_s').value,
+    claro_pilas:     document.getElementById('claro_pilas').value,
+    gamma_mezcla:    document.getElementById('gamma_mezcla').value,
+    pila_ancho:      document.getElementById('pila_ancho').value,
+    pila_forma:      document.getElementById('pila_forma').value,
+    pila_theta:      document.getElementById('pila_theta').value,
+    pila_largo:      document.getElementById('pila_largo').value,
+    pila_k1:         document.getElementById('pila_k1').value,
+    pila_k3:         document.getElementById('pila_k3').value,
+    estribo_l:       document.getElementById('estribo_l').value,
+    estribo_forma:   document.getElementById('estribo_forma').value,
+    estribo_theta:   document.getElementById('estribo_theta').value,
+    estribo_spill:   document.getElementById('estribo_forma').value.startsWith('talud'),
+    estribo_agua_clara: document.getElementById('estribo_regimen').value === 'clara',
+    estribo_q1q:     document.getElementById('estribo_q1q').value,
   };
 
   try {
@@ -684,6 +893,9 @@ function renderResults(d, payload) {
     </tr>`;
   }).join('');
 
+  // Socavación section
+  renderScour(d.scour);
+
   // GEE section
   if (d.gee.gee_active) {
     document.getElementById('geeSection').classList.remove('hidden');
@@ -709,6 +921,51 @@ function renderResults(d, payload) {
   }
 }
 
+// ── SOCAVACIÓN ────────────────────────────────────────────────────────────────
+function renderScour(scour) {
+  const sec = document.getElementById('scourSection');
+  if (!scour) { sec.classList.add('hidden'); return; }
+
+  const groups = [
+    { key: 'general',     title: 'General (descenso del fondo)', color: 'sky' },
+    { key: 'contraccion', title: 'Por contracción',             color: 'indigo' },
+    { key: 'pila',        title: 'Local en pila',               color: 'rose' },
+    { key: 'estribo',     title: 'Local en estribo',            color: 'orange' },
+  ];
+
+  const grid = document.getElementById('scourGrid');
+  grid.innerHTML = '';
+  let total = 0;
+
+  groups.forEach(g => {
+    const rows = (scour[g.key] || []);
+    if (!rows.length) return;
+    total += rows.length;
+    const items = rows.map(r => `
+      <div class="flex items-baseline justify-between gap-2 py-1.5 border-b border-slate-50 last:border-0">
+        <div class="min-w-0">
+          <div class="text-sm font-semibold text-slate-800 truncate">${r.metodo}</div>
+          <div class="text-[11px] text-slate-400 truncate">${r.nota || ''}</div>
+        </div>
+        <div class="mono text-sm font-bold text-${g.color}-700 whitespace-nowrap">
+          ${r.valor != null ? r.valor.toFixed(2) : '--'} ${r.unidad}
+        </div>
+      </div>`).join('');
+    grid.innerHTML += `
+      <div class="border border-${g.color}-100 rounded-lg p-3 bg-${g.color}-50/30">
+        <div class="text-xs font-bold text-${g.color}-700 uppercase mb-2">${g.title}</div>
+        ${items}
+      </div>`;
+  });
+
+  const avisos = document.getElementById('scourAvisos');
+  avisos.innerHTML = (scour.avisos && scour.avisos.length)
+    ? '⚠ ' + scour.avisos.join(' · ') : '';
+
+  if (total > 0) sec.classList.remove('hidden');
+  else sec.classList.add('hidden');
+}
+
 // ── REPORT ───────────────────────────────────────────────────────────────────
 function generateReport() {
   const p = new URLSearchParams({
@@ -721,6 +978,27 @@ function generateReport() {
     velocity: document.getElementById('velocity').value,
     temp:     document.getElementById('temp').value,
     slope:    document.getElementById('slope').value,
+    // Socavación (opcional)
+    caudal:          document.getElementById('caudal').value,
+    ancho_b:         document.getElementById('ancho_b').value,
+    ancho_w2:        document.getElementById('ancho_w2').value,
+    periodo_retorno: document.getElementById('periodo_retorno').value,
+    cohesivo:        document.getElementById('tipo_suelo').value === 'cohesivo' ? '1' : '',
+    gamma_s:         document.getElementById('gamma_s').value,
+    claro_pilas:     document.getElementById('claro_pilas').value,
+    gamma_mezcla:    document.getElementById('gamma_mezcla').value,
+    pila_ancho:      document.getElementById('pila_ancho').value,
+    pila_forma:      document.getElementById('pila_forma').value,
+    pila_theta:      document.getElementById('pila_theta').value,
+    pila_largo:      document.getElementById('pila_largo').value,
+    pila_k1:         document.getElementById('pila_k1').value,
+    pila_k3:         document.getElementById('pila_k3').value,
+    estribo_l:       document.getElementById('estribo_l').value,
+    estribo_forma:   document.getElementById('estribo_forma').value,
+    estribo_theta:   document.getElementById('estribo_theta').value,
+    estribo_spill:   document.getElementById('estribo_forma').value.startsWith('talud') ? '1' : '',
+    estribo_agua_clara: document.getElementById('estribo_regimen').value === 'clara' ? '1' : '',
+    estribo_q1q:     document.getElementById('estribo_q1q').value,
   });
   window.open('/report?' + p.toString(), '_blank');
 }

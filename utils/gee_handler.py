@@ -888,3 +888,57 @@ def get_ndti_turbidity(lat, lon):
         reducer=ee.Reducer.mean(), geometry=point.buffer(50), scale=10
     ).getInfo()
     return val.get("nd", 0.0)
+
+
+def get_channel_width(lat, lon, search_m=300, occurrence_pct=50, scale=30):
+    """
+    Estima el ancho del cauce B (m) a partir de la máscara de agua permanente
+    del JRC Global Surface Water (1984–2021).
+
+    Método: se toma el agua permanente (occurrence ≥ occurrence_pct %), se
+    calcula la transformada de distancia hacia la orilla más cercana (banco)
+    y se toma el MÁXIMO dentro de un radio `search_m` alrededor del punto: ese
+    máximo corresponde a la línea central del cauce y equivale a la SEMI-anchura.
+    El ancho es 2× esa distancia.
+
+    Es una APROXIMACIÓN objetiva y multitemporal (útil para B, B_e, W1, W2 de
+    Lischtvan-Lebediev y contracción), no un levantamiento topográfico. Limita:
+    - Un píxel JRC/Landsat es de 30 m; cauces < ~30 m de ancho no se resuelven.
+    - En confluencias o cerca de lagos puede sobrestimar (reducir `search_m`).
+    - No ve bajo el agua: no reemplaza batimetría.
+
+    Devuelve un dict {width_m, half_width_m, source, note} o {error}.
+    """
+    try:
+        point = ee.Geometry.Point([lon, lat])
+        gsw = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+        water = gsw.select("occurrence").gte(occurrence_pct)
+        # Distancia (en píxeles²) de cada píxel al agua-NO (tierra=1 tras Not()).
+        # Para un píxel de agua da la distancia al banco más cercano.
+        land = water.Not()
+        dist_m = (land.fastDistanceTransform(256).sqrt()
+                  .multiply(scale)
+                  .updateMask(water)
+                  .rename("halfw"))
+        stats = dist_m.reduceRegion(
+            reducer=ee.Reducer.max(),
+            geometry=point.buffer(search_m),
+            scale=scale,
+            maxPixels=int(1e8),
+            bestEffort=True,
+        ).getInfo()
+        half = stats.get("halfw")
+        if half is None:
+            return {"error": "No se encontró agua permanente cerca del punto "
+                             "(JRC GSW). Verifique las coordenadas o use un radio mayor."}
+        width = round(2.0 * float(half), 1)
+        return {
+            "width_m": width,
+            "half_width_m": round(float(half), 1),
+            "source": "JRC Global Surface Water 1984–2021 (occurrence ≥ "
+                      f"{occurrence_pct}%), transformada de distancia a {scale} m",
+            "note": "Aproximación multitemporal; verificar con levantamiento. "
+                    "No resuelve cauces < ~30 m ni reemplaza batimetría.",
+        }
+    except Exception as e:
+        return {"error": f"Error GEE al estimar el ancho: {e}"}

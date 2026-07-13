@@ -742,6 +742,44 @@ table tfoot td {
   </figure>
   {% endif %}
 
+  {% if results.scour %}
+  <h2>6.6 Socavación</h2>
+  <p>Se estima la profundidad de socavación por varios métodos según el tipo de fenómeno. La <strong>socavación general</strong> y por <strong>contracción</strong> describen el descenso del fondo del cauce; la socavación <strong>local en pila</strong> y en <strong>estribo</strong> corresponden a la erosión concentrada al pie de la estructura del puente. Las fórmulas y coeficientes (β, x, μ, ψ, Ks, Kθ) se transcribieron de las fuentes primarias: <em>Maza Álvarez (1968), Socavación en Cauces Naturales</em>; el <em>Manual de Hidrología y Drenaje de la Administradora Boliviana de Carreteras (ABC)</em> —referencia normativa en Bolivia— y HEC-18 / FHWA.</p>
+
+  {% set grupos = [('general','Socavación general (descenso del fondo)'),
+                   ('contraccion','Socavación por contracción'),
+                   ('pila','Socavación local en pila'),
+                   ('estribo','Socavación local en estribo')] %}
+  {% for gkey, gtitle in grupos %}
+    {% if results.scour[gkey] %}
+    <p class="no-indent" style="text-indent:0; margin-top:1em;"><strong>{{ gtitle }}</strong></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Método</th>
+          <th style="text-align:right;">Valor</th>
+          <th>Observaciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results.scour[gkey] %}
+        <tr>
+          <td><strong>{{ row.metodo }}</strong></td>
+          <td class="td-num">{{ '%.2f'|format(row.valor) if row.valor is not none else '—' }} {{ row.unidad }}</td>
+          <td><em>{{ row.nota }}</em></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% endfor %}
+  <p class="tbl-note no-indent"><strong>Nota.</strong> Valores en metros. Los métodos de régimen (Lacey, Blench, Maza-Echavarría, Kellerhals) devuelven la profundidad media medida desde la superficie; Lischtvan-Lebediev/Maza y los de contracción devuelven el descenso del fondo; pila y estribo devuelven la socavación local al pie. El régimen de contracción (lecho vivo / agua clara) se decide con la velocidad crítica V_c = 6.2·y₁^(1/6)·d₅₀^(1/3) (Laursen). Para pilas se aplican los topes del Manual ABC (d_s,máx = 2.4b si Fr ≤ 0.8; 3.0b si Fr > 0.8).</p>
+  {% if results.scour.avisos %}
+  <p class="tbl-note no-indent" style="color:#b45309;"><strong>Avisos:</strong> {{ results.scour.avisos|join(' · ') }}</p>
+  {% endif %}
+  <p class="tbl-note no-indent"><strong>Alcance de la percepción remota.</strong> La socavación no se mide con satélite: los sensores ópticos (Landsat, Sentinel-2) solo leen la superficie del agua y no penetran la columna turbia durante la avenida, que es cuando ocurre la fosa. Google Earth Engine aporta <em>insumos</em> de estas fórmulas (ancho del cauce B y B_e, W₁/W₂ por contracción, pendiente S, cobertura y aporte de sedimento por RUSLE), pero la profundidad de socavación debe verificarse con batimetría, ecosonda o instrumentación sumergida en la pila.</p>
+  {% endif %}
+
 </div>
 
 <!-- ══════════════════════════════════════════════════════════

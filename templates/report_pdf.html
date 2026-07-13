@@ -366,7 +366,38 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <!-- ═══════════════════ CAP. 9 ═══════════════════ -->
 <h1>9. Impactos sobre Infraestructura</h1>
 <h2>9.1 Socavación en Puentes</h2>
-<p>Para d₅₀ = {{ results.d50 }} mm y las condiciones hidráulicas registradas, la profundidad de socavación general se estima con la ecuación de Lischtvan-Lebediev (SENAMHI Bolivia) y la socavación local en pilas con HEC-18 (Richardson y Davis, 2001).</p>
+<p>Para d₅₀ = {{ results.d50 }} mm y las condiciones hidráulicas registradas, la profundidad de socavación se estima por varios métodos según el tipo de fenómeno. Las fórmulas y coeficientes (β, x, μ, ψ, Ks, Kθ) se transcribieron de las fuentes primarias: <em>Maza Álvarez (1968)</em>; el <em>Manual de Hidrología y Drenaje de la Administradora Boliviana de Carreteras (ABC)</em> —normativo en Bolivia— y HEC-18 / FHWA.</p>
+
+{% if results.scour %}
+{% set grupos = [('general','Socavación general (descenso del fondo)'),
+                 ('contraccion','Socavación por contracción'),
+                 ('pila','Socavación local en pila'),
+                 ('estribo','Socavación local en estribo')] %}
+{% for gkey, gtitle in grupos %}
+  {% if results.scour[gkey] %}
+  <p class="no-indent" style="text-indent:0; margin-top:0.8em;"><strong>{{ gtitle }}</strong></p>
+  <table>
+    <thead>
+      <tr><th>Método</th><th style="text-align:right;">Valor</th><th>Observaciones</th></tr>
+    </thead>
+    <tbody>
+      {% for row in results.scour[gkey] %}
+      <tr>
+        <td>{{ row.metodo }}</td>
+        <td class="td-num">{{ '%.2f'|format(row.valor) if row.valor is not none else '—' }} {{ row.unidad }}</td>
+        <td><em style="font-size:8pt;">{{ row.nota }}</em></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% endfor %}
+<p class="tbl-note no-indent" style="font-size:8pt;"><strong>Nota.</strong> Los métodos de régimen (Lacey, Blench, Maza-Echavarría, Kellerhals) dan la profundidad media desde la superficie; Lischtvan-Lebediev/Maza y contracción dan el descenso del fondo; pila y estribo dan la socavación local al pie. El régimen de contracción se decide con V_c = 6.2·y₁^(1/6)·d₅₀^(1/3) (Laursen). Pilas con topes ABC (2.4b si Fr≤0.8; 3.0b si Fr>0.8).</p>
+{% else %}
+<p><em>No se ingresaron datos de geometría del puente (ancho, pila, estribo); la sección de socavación se genera al completar esos campos en la calculadora.</em></p>
+{% endif %}
+
+<p class="tbl-note no-indent" style="font-size:8pt; margin-top:0.6em;"><strong>Alcance de la percepción remota.</strong> La socavación no se mide con satélite: los sensores ópticos (Landsat, Sentinel-2) solo leen la superficie del agua y no penetran la columna turbia durante la avenida, que es cuando ocurre la fosa. Google Earth Engine aporta <em>insumos</em> de estas fórmulas (ancho del cauce B y B_e, W₁/W₂ por contracción, pendiente S, cobertura/rugosidad, aporte de sedimento por RUSLE), pero la profundidad de socavación debe verificarse con batimetría, ecosonda o instrumentación sumergida en la pila.</p>
 <h2>9.2 Sedimentación en Canales</h2>
 <p>La tasa promedio MPM-VR es q_b = {{ "%.6f"|format((results.transport.meyer_peter_muller + results.transport.van_rijn)/2) }} kg/(m·s). Para un canal de B metros de ancho operando t horas/año, la masa de sedimento depositada = q_b × B × t × 3600 [kg/año].</p>
 <h2>9.3 Colmatación de Embalses</h2>

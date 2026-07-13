@@ -27,6 +27,7 @@ from models.sediment import (
     engelund_hansen,
     van_rijn_bedload
 )
+from models.socavacion import compute_socavacion
 from utils.gee_handler import (
     initialize_gee,
     gee_ready,
@@ -44,7 +45,8 @@ from utils.gee_handler import (
     get_slope_from_dem,
     get_map_url,
     get_landcover_at_point,
-    get_ndti_turbidity
+    get_ndti_turbidity,
+    get_channel_width
 )
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
@@ -2595,6 +2597,57 @@ def calculate():
         qt_eh = engelund_hansen(velocity, depth, slope, d50_mm, s, rho_w)
         qb_vr = van_rijn_bedload(velocity, depth, d50_mm, dstar, s, rho_w, nu)
 
+        # ── SOCAVACIÓN (opcional) ──────────────────────────────────────────
+        # Solo se calculan los métodos cuyos datos existan. Reutiliza los
+        # parámetros hidráulicos ya calculados (u_star, ws, froude, dstar).
+        def _optf(key):
+            val = data.get(key)
+            try:
+                return float(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        scour_params = {
+            "d50_mm": d50_mm,
+            "d90_mm": d90_mm,
+            "dm_mm": _optf("dm") or d50_mm,
+            "depth": depth,
+            "velocity": velocity,
+            "u_star": u_star,
+            "w": ws,
+            "froude": froude,
+            "Q": _optf("caudal"),
+            "B": _optf("ancho_b"),
+            "W2": _optf("ancho_w2"),
+            "tr": _optf("periodo_retorno") or 100,
+            "cohesivo": bool(data.get("cohesivo", False)),
+            "gamma_s": _optf("gamma_s"),
+            "gamma_mezcla": _optf("gamma_mezcla"),
+            "claro_pilas": _optf("claro_pilas"),
+            "mu": _optf("mu") or 1.0,
+            "pila_ancho": _optf("pila_ancho"),
+            "pila_forma": data.get("pila_forma", "circular"),
+            "pila_theta": _optf("pila_theta") or 0.0,
+            "pila_largo": _optf("pila_largo"),
+            "pila_lecho": data.get("pila_lecho", "plano"),
+            "pila_k1": _optf("pila_k1"),
+            "pila_k3": _optf("pila_k3"),
+            "estribo_L": _optf("estribo_l"),
+            "estribo_forma": data.get("estribo_forma"),
+            "estribo_theta": _optf("estribo_theta") or 90,
+            "estribo_spill": bool(data.get("estribo_spill", True)),
+            "estribo_agua_clara": bool(data.get("estribo_agua_clara", False)),
+            "estribo_q1q": _optf("estribo_q1q"),
+            "estribo_espigones": bool(data.get("estribo_espigones", False)),
+            "pila_inundacion": bool(data.get("pila_inundacion", False)),
+        }
+        try:
+            scour = compute_socavacion(scour_params)
+        except Exception as e:
+            print(f"Socavación error: {e}")
+            scour = {"general": [], "contraccion": [], "pila": [],
+                     "estribo": [], "avisos": [str(e)]}
+
         # Sensitivity: transport vs depth
         depths_range = [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
         sensitivity = [
@@ -2646,6 +2699,7 @@ def calculate():
                     "van_rijn": round(qb_vr, 8),
                 },
                 "sensitivity": sensitivity,
+                "scour": scour,
                 "maps": maps,
             }
         )
@@ -2738,6 +2792,48 @@ def report():
                 "van_rijn": round(qb_vr, 8),
             },
         }
+
+        # ── Socavación (opcional, si vinieron datos por la URL) ──────────────
+        def _ropt(key):
+            val = request.args.get(key)
+            try:
+                return float(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            scour = compute_socavacion({
+                "d50_mm": d50, "d90_mm": d90, "dm_mm": _ropt("dm") or d50,
+                "depth": depth, "velocity": velocity, "u_star": u_star,
+                "w": ws, "froude": froude,
+                "Q": _ropt("caudal"), "B": _ropt("ancho_b"),
+                "W2": _ropt("ancho_w2"), "tr": _ropt("periodo_retorno") or 100,
+                "cohesivo": bool(request.args.get("cohesivo")),
+                "gamma_s": _ropt("gamma_s"),
+                "gamma_mezcla": _ropt("gamma_mezcla"),
+                "claro_pilas": _ropt("claro_pilas"), "mu": _ropt("mu") or 1.0,
+                "pila_ancho": _ropt("pila_ancho"),
+                "pila_forma": request.args.get("pila_forma", "circular"),
+                "pila_theta": _ropt("pila_theta") or 0.0,
+                "pila_largo": _ropt("pila_largo"),
+                "pila_k1": _ropt("pila_k1"),
+                "pila_k3": _ropt("pila_k3"),
+                "estribo_L": _ropt("estribo_l"),
+                "estribo_forma": request.args.get("estribo_forma"),
+                "estribo_theta": _ropt("estribo_theta") or 90,
+                "estribo_spill": bool(request.args.get("estribo_spill")),
+                "estribo_agua_clara": bool(request.args.get("estribo_agua_clara")),
+                "estribo_q1q": _ropt("estribo_q1q"),
+                "estribo_espigones": bool(request.args.get("estribo_espigones")),
+                "pila_inundacion": bool(request.args.get("pila_inundacion")),
+            })
+            has_scour = any(scour.get(k) for k in
+                            ("general", "contraccion", "pila", "estribo"))
+            results["scour"] = scour if has_scour else None
+        except Exception as se:
+            print(f"Socavación (report) error: {se}")
+            results["scour"] = None
+
         results["charts"] = generate_charts(results)
         try:
             results["maps"] = generate_all_thematic_maps(lat, lon)
@@ -2835,6 +2931,48 @@ def report_pdf():
                 "van_rijn": round(qb_vr, 8),
             },
         }
+
+        # ── Socavación (opcional, si vinieron datos por la URL) ──────────────
+        def _ropt(key):
+            val = request.args.get(key)
+            try:
+                return float(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            scour = compute_socavacion({
+                "d50_mm": d50, "d90_mm": d90, "dm_mm": _ropt("dm") or d50,
+                "depth": depth, "velocity": velocity, "u_star": u_star,
+                "w": ws, "froude": froude,
+                "Q": _ropt("caudal"), "B": _ropt("ancho_b"),
+                "W2": _ropt("ancho_w2"), "tr": _ropt("periodo_retorno") or 100,
+                "cohesivo": bool(request.args.get("cohesivo")),
+                "gamma_s": _ropt("gamma_s"),
+                "gamma_mezcla": _ropt("gamma_mezcla"),
+                "claro_pilas": _ropt("claro_pilas"), "mu": _ropt("mu") or 1.0,
+                "pila_ancho": _ropt("pila_ancho"),
+                "pila_forma": request.args.get("pila_forma", "circular"),
+                "pila_theta": _ropt("pila_theta") or 0.0,
+                "pila_largo": _ropt("pila_largo"),
+                "pila_k1": _ropt("pila_k1"),
+                "pila_k3": _ropt("pila_k3"),
+                "estribo_L": _ropt("estribo_l"),
+                "estribo_forma": request.args.get("estribo_forma"),
+                "estribo_theta": _ropt("estribo_theta") or 90,
+                "estribo_spill": bool(request.args.get("estribo_spill")),
+                "estribo_agua_clara": bool(request.args.get("estribo_agua_clara")),
+                "estribo_q1q": _ropt("estribo_q1q"),
+                "estribo_espigones": bool(request.args.get("estribo_espigones")),
+                "pila_inundacion": bool(request.args.get("pila_inundacion")),
+            })
+            has_scour = any(scour.get(k) for k in
+                            ("general", "contraccion", "pila", "estribo"))
+            results["scour"] = scour if has_scour else None
+        except Exception as se:
+            print(f"Socavación (report) error: {se}")
+            results["scour"] = None
+
         results["charts"] = generate_charts(results)
         try:
             results["maps"] = generate_all_thematic_maps(lat, lon)
@@ -2857,6 +2995,23 @@ def report_pdf():
     except Exception as e:
         import traceback; traceback.print_exc()
         return str(e), 500
+
+
+@app.route("/channel_width", methods=["POST"])
+def channel_width():
+    """Estima el ancho del cauce B (m) desde GEE (JRC Global Surface Water)."""
+    if not GEE_AVAILABLE or not gee_ready():
+        return jsonify({"error": "Google Earth Engine no está disponible en este entorno."}), 503
+    try:
+        data = request.json or {}
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+        search_m = float(data.get("search_m", 300))
+        result = get_channel_width(lat, lon, search_m=search_m)
+        code = 200 if "width_m" in result else 422
+        return jsonify(result), code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route("/maps")
