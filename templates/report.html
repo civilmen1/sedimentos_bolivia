@@ -742,6 +742,43 @@ table tfoot td {
   </figure>
   {% endif %}
 
+  {% if results.scour %}
+  <h2>6.6 Socavación</h2>
+  <p>Se estima la profundidad de socavación por varios métodos según el tipo de fenómeno. La <strong>socavación general</strong> y por <strong>contracción</strong> describen el descenso del fondo del cauce; la socavación <strong>local en pila</strong> y en <strong>estribo</strong> corresponden a la erosión concentrada al pie de la estructura del puente. Las fórmulas provienen de la literatura clásica de hidráulica fluvial (Maza Álvarez; Lischtvan-Lebediev; HEC-18 / FHWA).</p>
+
+  {% set grupos = [('general','Socavación general (descenso del fondo)'),
+                   ('contraccion','Socavación por contracción'),
+                   ('pila','Socavación local en pila'),
+                   ('estribo','Socavación local en estribo')] %}
+  {% for gkey, gtitle in grupos %}
+    {% if results.scour[gkey] %}
+    <p class="no-indent" style="text-indent:0; margin-top:1em;"><strong>{{ gtitle }}</strong></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Método</th>
+          <th style="text-align:right;">Profundidad [m]</th>
+          <th>Observaciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in results.scour[gkey] %}
+        <tr>
+          <td><strong>{{ row.metodo }}</strong></td>
+          <td class="td-num">{{ '%.2f'|format(row.valor) if row.valor is not none else '—' }}</td>
+          <td><em>{{ row.nota }}</em></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% endfor %}
+  <p class="tbl-note no-indent"><strong>Nota.</strong> Valores en metros. Los métodos de régimen (Lacey, Blench, Maza-Echavarría, Kellerhals) devuelven la profundidad media medida desde la superficie; Lischtvan-Lebediev/Maza y los de contracción devuelven el descenso del fondo; pila y estribo devuelven la socavación local al pie. Verifíquense los coeficientes β (periodo de retorno) y el exponente x contra la fuente antes de un diseño definitivo (EDTP).</p>
+  {% if results.scour.avisos %}
+  <p class="tbl-note no-indent" style="color:#b45309;"><strong>Avisos:</strong> {{ results.scour.avisos|join(' · ') }}</p>
+  {% endif %}
+  {% endif %}
+
 </div>
 
 <!-- ══════════════════════════════════════════════════════════
