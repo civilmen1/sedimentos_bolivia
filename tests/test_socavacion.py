@@ -205,15 +205,36 @@ def test_laursen_toch_esviajada_usa_k3():
     assert s == pytest.approx(1.5 * 2.0 * 1.5, rel=1e-6)
 
 
-def test_laursen_toch_en_orquestador_requiere_k1():
+def test_laursen_toch_k1_curva_fig21():
+    # Fig.21: en h/b=1.0 la curva pasa por K1≈1.50; monótona creciente
+    assert sc.laursen_toch_k1(1.0) == pytest.approx(1.50, rel=1e-6)
+    assert sc.laursen_toch_k1(0.5) < sc.laursen_toch_k1(5.0)
+    assert sc.laursen_toch_k1(5.0) == pytest.approx(2.45, rel=1e-6)
+
+
+def test_laursen_toch_k3_curva_fig22():
+    # Fig.22: en φ=0 todas las curvas valen 1.0; crece con φ y con a/b
+    assert sc.laursen_toch_k3(0, 8) == pytest.approx(1.0, rel=1e-9)
+    assert sc.laursen_toch_k3(90, 16) > sc.laursen_toch_k3(90, 2)
+    assert sc.laursen_toch_k3(90, 2) > sc.laursen_toch_k3(15, 2)
+
+
+def test_laursen_toch_automatico_sin_k1_manual():
+    # Ahora Laursen-Toch se calcula solo (K1/K3 de las curvas), sin K1 manual
     base = dict(depth=2.0, velocity=1.5, pila_ancho=1.5, pila_forma="rectangular",
                 froude=0.34)
-    sin_k1 = sc.compute_socavacion(base)
-    con_k1 = sc.compute_socavacion({**base, "pila_k1": 1.5})
-    metodos_sin = [r["metodo"] for r in sin_k1["pila"]]
-    metodos_con = [r["metodo"] for r in con_k1["pila"]]
-    assert not any("Laursen-Toch" in m for m in metodos_sin)
-    assert any("Laursen-Toch" in m for m in metodos_con)
+    r = sc.compute_socavacion(base)
+    lt = [x for x in r["pila"] if "Laursen-Toch" in x["metodo"]]
+    assert lt and lt[0]["valor"] > 0
+    assert "Fig.21" in lt[0]["nota"]
+
+
+def test_laursen_toch_override_manual():
+    base = dict(depth=2.0, velocity=1.5, pila_ancho=1.5, pila_forma="rectangular",
+                froude=0.34, pila_k1=2.0)
+    r = sc.compute_socavacion(base)
+    lt = [x for x in r["pila"] if "Laursen-Toch" in x["metodo"]][0]
+    assert "manual" in lt["nota"]
 
 
 def test_artamonov():
