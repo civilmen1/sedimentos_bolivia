@@ -127,6 +127,50 @@ ABUT_SHAPE_KS = {
 # estribo y la ribera aguas arriba.
 _KTHETA_ESTRIBO = {30: 1.10, 60: 1.05, 90: 1.00, 120: 0.98, 150: 0.90}
 
+# ── CRITERIO UNAM — pilas (Maza & Sánchez Bribiesca, Figs.31-33, Tabla XIV) ──
+# S_o se obtiene de (H+S_o)/b1 leído en ordenadas contra F² = f_c·V²/(gH).
+# f_c (Tabla XIV, corrección por esviaje; solo si V²/gH > 0.06).
+_UNAM_FC = {0: 1.00, 15: 1.25, 30: 1.40, 45: 1.45}
+# Malla de digitalización de las curvas: filas H/b1, columnas F².
+_UNAM_HB = [0.5, 1.0, 2.0, 3.0, 4.0, 5.5]
+_UNAM_F2 = [0.01, 0.03, 0.08, 0.20, 0.80]
+# (H+S_o)/b1 leído de cada figura (curvas digitalizadas a ojo; verificar).
+_UNAM_CURVES = {
+    "circular": [   # Fig.33
+        [0.75, 0.85, 1.05, 1.30, 1.40],   # H/b1 = 0.5
+        [1.35, 1.50, 1.80, 2.10, 2.25],   # 1.0
+        [2.35, 2.55, 3.00, 3.40, 3.55],   # 2.0
+        [3.40, 3.65, 4.20, 4.70, 4.85],   # 3.0
+        [4.50, 4.80, 5.40, 6.00, 6.15],   # 4.0
+        [6.40, 6.80, 7.50, 7.95, 8.05],   # 5.5
+    ],
+    "redondeada": [  # Fig.32
+        [0.78, 0.90, 1.10, 1.35, 1.45],
+        [1.40, 1.55, 1.88, 2.18, 2.30],
+        [2.40, 2.62, 3.10, 3.50, 3.65],
+        [3.45, 3.75, 4.30, 4.82, 5.00],
+        [4.55, 4.90, 5.55, 6.15, 6.30],
+        [6.50, 6.95, 7.65, 8.05, 8.15],
+    ],
+    "rectangular": [  # Fig.31
+        [0.85, 1.00, 1.25, 1.50, 1.60],
+        [1.50, 1.70, 2.05, 2.35, 2.50],
+        [2.55, 2.80, 3.30, 3.75, 3.90],
+        [3.60, 3.95, 4.55, 5.10, 5.30],
+        [4.70, 5.10, 5.80, 6.40, 6.60],
+        [6.60, 7.10, 7.85, 8.30, 8.45],
+    ],
+}
+# Mapeo de la forma del formulario al set de curvas UNAM.
+_UNAM_FORMA = {
+    "circular": "circular", "grupo_cilindros": "circular",
+    "rect_redondeado": "redondeada", "rect_semicircular": "redondeada",
+    "semicircular_triangular": "redondeada", "lenticular": "redondeada",
+    "eliptica": "redondeada",
+    "rectangular": "rectangular", "cuadrada": "rectangular",
+    "rect_triangular": "rectangular",
+}
+
 # ── ARTAMONOV — estribos (Maza 1968, ec. 36, p.92) ──────────────────────────
 # S_T = Pα · Pq · Pk · Ho  (medido desde la superficie libre del agua).
 # Pα — ángulo de esviaje del estribo. (El PDF empieza en 30°; la tabla clásica
@@ -442,6 +486,33 @@ def k4_armor(V1, y1, a, d50_mm, d95_mm):
     if v_r <= 0:
         return 0.4
     return max(0.4 * v_r ** 0.15, 0.4)
+
+
+def fc_unam(phi_deg):
+    """Coeficiente f_c de esviaje (UNAM, Tabla XIV), interpolado (0–45°)."""
+    return _interp_table(_UNAM_FC, float(phi_deg))
+
+
+def criterio_unam(V, H, b1, forma="circular", phi_deg=0.0):
+    """
+    Criterio UNAM (Maza & Sánchez Bribiesca, Figs.31-33) — socavación local en
+    pila, medida desde el fondo:
+        F² = f_c · V²/(gH)   (f_c solo si V²/gH > 0.06)
+        (H+S_o)/b1 = valor leído de la curva H/b1 → S_o = (H+S_o)/b1·b1 − H
+    forma ∈ {circular, redondeada, rectangular}; b1 = proyección ⊥ al flujo.
+    Las curvas son digitalizaciones de las figuras (aprox.).
+    """
+    v2gh = V ** 2 / (G * H)
+    fc = fc_unam(min(phi_deg, 90 - phi_deg) if phi_deg > 45 else phi_deg) \
+        if v2gh > 0.06 else 1.0
+    F2 = fc * v2gh
+    tabla = _UNAM_CURVES.get(forma, _UNAM_CURVES["circular"])
+    Hb = H / b1
+    # interpola (H+S_o)/b1 en F² dentro de cada curva H/b1, luego en H/b1
+    col = [float(np.interp(F2, _UNAM_F2, fila)) for fila in tabla]
+    ord_val = float(np.interp(Hb, _UNAM_HB, col))
+    So = ord_val * b1 - H
+    return max(So, 0.0), fc, ord_val
 
 
 def breusers_nicollet_shen(b, y, Ks=1.0, Ktheta=1.0):
@@ -762,6 +833,18 @@ def compute_socavacion(params):
                     "alineada (K1·K2·b)")
         out["pila"].append(_row(
             "Laursen-Toch (Maza)", slt, "m", nota, "Laursen-Toch / Maza 1968"))
+        # Criterio UNAM (Maza & Sánchez Bribiesca) — requiere velocidad
+        if v:
+            forma_u = _UNAM_FORMA.get(forma, "circular")
+            b1u = b
+            if theta and largo:
+                b1u = largo * np.sin(np.radians(theta)) + b * np.cos(np.radians(theta))
+            su, fcu, ordu = criterio_unam(v, y, b1u, forma=forma_u, phi_deg=theta or 0.0)
+            out["pila"].append(_row(
+                "Criterio UNAM (Maza-Sánchez)", su, "m",
+                f"forma {forma_u} · b1={b1u:.2f} m · f_c={fcu:.2f} · "
+                f"(H+So)/b1={ordu:.2f} · curvas digitalizadas (aprox.)",
+                "Maza & Sánchez Bribiesca / UNAM"))
 
     # --- 4. ESTRIBOS ---
     L = params.get("estribo_L")
