@@ -45,7 +45,8 @@ from utils.gee_handler import (
     get_slope_from_dem,
     get_map_url,
     get_landcover_at_point,
-    get_ndti_turbidity
+    get_ndti_turbidity,
+    get_channel_width
 )
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
@@ -2994,6 +2995,23 @@ def report_pdf():
     except Exception as e:
         import traceback; traceback.print_exc()
         return str(e), 500
+
+
+@app.route("/channel_width", methods=["POST"])
+def channel_width():
+    """Estima el ancho del cauce B (m) desde GEE (JRC Global Surface Water)."""
+    if not GEE_AVAILABLE or not gee_ready():
+        return jsonify({"error": "Google Earth Engine no está disponible en este entorno."}), 503
+    try:
+        data = request.json or {}
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+        search_m = float(data.get("search_m", 300))
+        result = get_channel_width(lat, lon, search_m=search_m)
+        code = 200 if "width_m" in result else 422
+        return jsonify(result), code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
 
 
 @app.route("/maps")

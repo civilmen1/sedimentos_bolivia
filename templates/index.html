@@ -220,6 +220,15 @@
                 class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
             </div>
           </div>
+          {% if gee_available %}
+          <button type="button" id="channelWidthBtn" onclick="fetchChannelWidth()"
+            class="mt-3 w-full text-xs bg-sky-100 hover:bg-sky-200 text-sky-800 font-semibold py-2 rounded-lg transition">
+            🛰 Estimar ancho B desde GEE (JRC Global Surface Water)
+          </button>
+          <p class="mt-1 text-[10px] text-slate-400 leading-snug">
+            Aproximación multitemporal en el punto del mapa. No resuelve cauces &lt; ~30 m; verificar con levantamiento.
+          </p>
+          {% endif %}
 
           <div class="text-[11px] font-bold text-amber-700 uppercase mt-4 mb-1">Pila</div>
           <div class="grid grid-cols-2 gap-3">
@@ -722,6 +731,31 @@ async function fetchGEEData() {
     }
   } catch (e) {
     alert('Error al consultar GEE: ' + e.message);
+  }
+}
+
+// ── ANCHO DEL CAUCE DESDE GEE ────────────────────────────────────────────────
+async function fetchChannelWidth() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lon = parseFloat(document.getElementById('lon').value);
+  const btn = document.getElementById('channelWidthBtn');
+  const prev = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '🛰 Consultando GEE…'; }
+  try {
+    const resp = await fetch('/channel_width', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon })
+    });
+    const d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    document.getElementById('ancho_b').value = d.width_m;
+    alert(`Ancho de cauce estimado (GEE): B ≈ ${d.width_m} m\n` +
+          `Semi-anchura: ${d.half_width_m} m\n\nFuente: ${d.source}\n\n${d.note}`);
+  } catch (e) {
+    alert('No se pudo estimar el ancho: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = prev; }
   }
 }
 
