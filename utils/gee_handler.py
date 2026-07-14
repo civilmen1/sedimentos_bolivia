@@ -237,6 +237,34 @@ def _hls_composite(region, start="2020-01-01", end="2025-01-01"):
     return l30.merge(s30).median().clip(region)
 
 
+def _s2_index(region, kind, start="2021-01-01", end="2025-01-01"):
+    """
+    Índice espectral desde Sentinel-2 SR SOLO (10 m) — un único sensor, sin
+    costuras. Máscara de nubes con Cloud Score+ (Google), muy superior a SCL en
+    trópicos nubosos (Andes/Amazonía). Composite = mediana enmascarada.
+      NDVI (B8,B4) | NDWI (B3,B8) | NDTI (B4,B3, turbidez → enmascarado a agua)
+
+    Es más liviano que la mezcla S2+Landsat previa (menos imágenes), lo que
+    reduce el riesgo de timeout / "memory exceeded" en getThumbURL que hacía
+    caer estos mapas al respaldo sintético.
+    """
+    csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
+    s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+          .filterBounds(region).filterDate(start, end)
+          .linkCollection(csp, ["cs"])
+          .map(lambda i: i.updateMask(i.select("cs").gte(0.6)))
+          .median().clip(region))
+    if kind == "ndvi":
+        return s2.normalizedDifference(["B8", "B4"]).rename("NDVI")
+    ndwi = s2.normalizedDifference(["B3", "B8"]).rename("NDWI")
+    if kind == "ndwi":
+        return ndwi
+    ndti = s2.normalizedDifference(["B4", "B3"]).rename("NDTI")
+    jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+           .select("occurrence").unmask(0))
+    return ndti.updateMask(jrc.gt(30).Or(ndwi.gt(0.0)))
+
+
 def _hls_index(region, kind):
     """
     Índice espectral desde el composite HLS armonizado (sin costuras):
@@ -345,21 +373,21 @@ LAYER_META = {
     "ndvi": {
         "vmin": -0.2, "vmax": 0.85,
         "palette": ["#a50026", "#d73027", "#fdae61", "#a6d96a", "#1a9850", "#006837"],
-        "source": "HLS — Harmonized Landsat-Sentinel-2 (NASA) L30+S30 — mediana 2020–2024, Fmask",
+        "source": "Sentinel-2 L2A (10 m) — mediana 2021–2024, nubes Cloud Score+",
         "title": "Índice de Vegetación Normalizado (NDVI)",
         "legend": "NDVI (−1 a +1)",
     },
     "ndwi": {
         "vmin": -0.5, "vmax": 0.5,
         "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
-        "source": "HLS — Harmonized Landsat-Sentinel-2 (NASA) L30+S30 — mediana 2020–2024, Fmask",
+        "source": "Sentinel-2 L2A (10 m) — mediana 2021–2024, nubes Cloud Score+",
         "title": "Índice de Agua Normalizado (NDWI)",
         "legend": "NDWI (−1 a +1)",
     },
     "ndti": {
         "vmin": -0.3, "vmax": 0.45,
         "palette": ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#cc4c02"],
-        "source": "HLS (NASA) L30+S30 — mediana 2020–2024, Fmask · enmascarado a agua (JRC/NDWI)",
+        "source": "Sentinel-2 L2A (10 m) — mediana 2021–2024, Cloud Score+ · enmascarado a agua (JRC/NDWI)",
         "title": "Índice de Turbidez Normalizado (NDTI)",
         "legend": "NDTI (−1 a +1)",
     },
@@ -415,17 +443,17 @@ def _layer_image(map_type, region, radius_km=15.0):
     if map_type == "ndvi":
         if large:
             return _modis_index(region, "ndvi")
-        return _hls_index(region, "ndvi")
+        return _s2_index(region, "ndvi")
 
     if map_type == "ndwi":
         if large:
             return _modis_index(region, "ndwi")
-        return _hls_index(region, "ndwi")
+        return _s2_index(region, "ndwi")
 
     if map_type == "ndti":
         if large:
             return _modis_index(region, "ndti")
-        return _hls_index(region, "ndti")
+        return _s2_index(region, "ndti")
 
     if map_type == "manning":
         lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(region)
@@ -604,7 +632,7 @@ def fetch_s2_rgb(lat, lon, radius_km=15.0, dimensions=1100):
         url = s2.visualize(min=0, max=3000, gamma=1.4).getThumbURL({
             "region": region, "dimensions": dimensions, "format": "png",
         })
-        resp = requests.get(url, timeout=90)
+        resp = requests.get(url, timeout=120)
         resp.raise_for_status()
         return mpimg.imread(io.BytesIO(resp.content))
     except Exception as e:
@@ -864,7 +892,7 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
             "dimensions": dimensions,
             "format": "png",
         })
-        resp = requests.get(url, timeout=90)
+        resp = requests.get(url, timeout=120)
         resp.raise_for_status()
         arr = mpimg.imread(io.BytesIO(resp.content))
         return arr, vmin, vmax
