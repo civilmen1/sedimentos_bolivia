@@ -237,6 +237,34 @@ def test_laursen_toch_override_manual():
     assert "manual" in lt["nota"]
 
 
+def test_fc_unam():
+    assert sc.fc_unam(0) == pytest.approx(1.00, rel=1e-9)
+    assert sc.fc_unam(30) == pytest.approx(1.40, rel=1e-9)
+    assert sc.fc_unam(45) == pytest.approx(1.45, rel=1e-9)
+
+
+def test_criterio_unam_basico():
+    So, fc, ordv = sc.criterio_unam(V=2.0, H=3.0, b1=1.5, forma="circular")
+    assert So >= 0 and ordv > 0
+    # velocidad baja (V²/gH < 0.06) -> f_c no se aplica aunque haya esviaje
+    So2, fc2, _ = sc.criterio_unam(V=0.5, H=3.0, b1=1.5, forma="rectangular", phi_deg=30)
+    assert fc2 == 1.0
+
+
+def test_criterio_unam_esviaje_aumenta():
+    # A mayor F² (por f_c de esviaje) la socavación no disminuye
+    So0, _, _ = sc.criterio_unam(3.0, 2.0, 1.5, forma="rectangular", phi_deg=0)
+    So30, _, _ = sc.criterio_unam(3.0, 2.0, 1.5, forma="rectangular", phi_deg=30)
+    assert So30 >= So0
+
+
+def test_unam_en_orquestador():
+    r = sc.compute_socavacion(dict(depth=3.0, velocity=2.0, pila_ancho=1.5,
+                                    pila_forma="circular", froude=0.4))
+    unam = [x for x in r["pila"] if "UNAM" in x["metodo"]]
+    assert unam and unam[0]["valor"] is not None
+
+
 def test_artamonov():
     # Caso especial: estribo recto y vertical (α=90, k=0) -> S_T = Pq·Ho
     St, socav = sc.artamonov(Ho=2.0, Q1_Q=0.30, alpha=90, k=0.0)
