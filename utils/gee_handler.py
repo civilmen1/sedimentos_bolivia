@@ -240,29 +240,36 @@ def _hls_composite(region, start="2020-01-01", end="2025-01-01"):
 def _s2_index(region, kind, start="2021-01-01", end="2025-01-01"):
     """
     Índice espectral desde Sentinel-2 SR SOLO (10 m) — un único sensor, sin
-    costuras. Máscara de nubes con Cloud Score+ (Google), muy superior a SCL en
-    trópicos nubosos (Andes/Amazonía). Composite = mediana enmascarada.
-      NDVI (B8,B4) | NDWI (B3,B8) | NDTI (B4,B3, turbidez → enmascarado a agua)
+    costuras. Máscara de nubes con Cloud Score+ (banda cs_cdf, umbral 0.60;
+    recomendado por el catálogo GEE, superior a SCL en trópicos). Mediana.
 
-    Es más liviano que la mezcla S2+Landsat previa (menos imágenes), lo que
-    reduce el riesgo de timeout / "memory exceeded" en getThumbURL que hacía
-    caer estos mapas al respaldo sintético.
+    Fórmulas verificadas (citas originales):
+      NDVI  (Rouse 1974):  (B8−B4)/(B8+B4)        = (NIR−Rojo)
+      MNDWI (Xu 2006):     (B3−B11)/(B3+B11)       = (Verde−SWIR1)
+      NDTI  (Lacaux 2007): (B4−B3)/(B4+B3)         = (Rojo−Verde), turbidez
+
+    Para el AGUA se usa MNDWI (Xu 2006) en vez de NDWI-McFeeters: Satgé et al.
+    (2017, Lago Poopó) mostró que NDWI subestima el agua somera y turbia del
+    Altiplano boliviano; MNDWI/AWEI/WRI son más exactos. El NDTI (turbidez) se
+    enmascara a agua (JRC occurrence>30% ∪ MNDWI>0), pues no tiene sentido físico
+    sobre tierra. NOTA: NDTI no está calibrado en Bolivia — es un proxy relativo.
     """
     csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
     s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
           .filterBounds(region).filterDate(start, end)
-          .linkCollection(csp, ["cs"])
-          .map(lambda i: i.updateMask(i.select("cs").gte(0.6)))
+          .linkCollection(csp, ["cs_cdf"])
+          .map(lambda i: i.updateMask(i.select("cs_cdf").gte(0.60)))
           .median().clip(region))
     if kind == "ndvi":
         return s2.normalizedDifference(["B8", "B4"]).rename("NDVI")
-    ndwi = s2.normalizedDifference(["B3", "B8"]).rename("NDWI")
+    # Índice de agua = MNDWI (verde−SWIR1), óptimo para Bolivia
+    mndwi = s2.normalizedDifference(["B3", "B11"]).rename("MNDWI")
     if kind == "ndwi":
-        return ndwi
+        return mndwi
     ndti = s2.normalizedDifference(["B4", "B3"]).rename("NDTI")
     jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
            .select("occurrence").unmask(0))
-    return ndti.updateMask(jrc.gt(30).Or(ndwi.gt(0.0)))
+    return ndti.updateMask(jrc.gt(30).Or(mndwi.gt(0.0)))
 
 
 def _hls_index(region, kind):
@@ -380,9 +387,9 @@ LAYER_META = {
     "ndwi": {
         "vmin": -0.5, "vmax": 0.5,
         "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
-        "source": "Sentinel-2 L2A (10 m) — mediana 2021–2024, nubes Cloud Score+",
-        "title": "Índice de Agua Normalizado (NDWI)",
-        "legend": "NDWI (−1 a +1)",
+        "source": "Sentinel-2 L2A (10 m) — MNDWI (Verde−SWIR1, Xu 2006), mediana 2021–2024, Cloud Score+",
+        "title": "Índice de Agua Modificado (MNDWI)",
+        "legend": "MNDWI (−1 a +1)",
     },
     "ndti": {
         "vmin": -0.3, "vmax": 0.45,

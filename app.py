@@ -57,7 +57,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v37-s2-cloudscore-indices"
+APP_VERSION = "v38-mndwi-cloudscore-cdf"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -398,7 +398,7 @@ MAP_TITLES = {
     'dem':     "Modelo Digital de Elevación (DEM) — SRTM 30 m",
     'slope':   "Pendiente del Terreno (S, m/m)",
     'ndvi':    "Índice de Vegetación Normalizado (NDVI)",
-    'ndwi':    "Índice de Agua Normalizado (NDWI)",
+    'ndwi':    "Índice de Agua Modificado (MNDWI — Xu 2006)",
     'ndti':    "Índice de Turbidez Normalizado (NDTI)",
     'manning': "Coeficiente de Manning (n) — ESA WorldCover",
     'risk':    "Índice Compuesto de Riesgo Hidrosedimentológico",
