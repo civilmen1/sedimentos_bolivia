@@ -208,6 +208,58 @@ def _ndvi_multisource(region):
     return _index_multisource(region, ("B8", "B4"), ("SR_B5", "SR_B4"), "NDVI")
 
 
+def _hls_composite(region, start="2020-01-01", end="2025-01-01"):
+    """
+    Composite HLS (Harmonized Landsat Sentinel-2, NASA) — L30 (Landsat 8/9) +
+    S30 (Sentinel-2), armonizado a una respuesta espectral común, NBAR (nadir
+    BRDF) y grilla 30 m. Al estar armonizado NO deja costuras entre sensores
+    (que era el problema de mezclar S2 crudo + Landsat C2 en una mediana).
+
+    Bandas renombradas a green/red/nir; NIR angosto (B05 en L30, B8A en S30)
+    para consistencia espectral; escala de reflectancia ×0.0001; enmascarado
+    por Fmask (bit 1 nube, 2 adyacente, 3 sombra). Mediana 2020–2024.
+    """
+    def _mask_hls(img):
+        f = img.select("Fmask")
+        clear = (f.bitwiseAnd(1 << 1).eq(0)        # no nube
+                 .And(f.bitwiseAnd(1 << 2).eq(0))  # no adyacente a nube
+                 .And(f.bitwiseAnd(1 << 3).eq(0)))  # no sombra de nube
+        return img.updateMask(clear).multiply(0.0001)
+
+    def _prep(col_id, nir_band):
+        return (ee.ImageCollection(col_id)
+                .filterBounds(region).filterDate(start, end)
+                .map(_mask_hls)
+                .select(["B03", "B04", nir_band], ["green", "red", "nir"]))
+
+    l30 = _prep("NASA/HLS/HLSL30/v002", "B05")
+    s30 = _prep("NASA/HLS/HLSS30/v002", "B8A")
+    return l30.merge(s30).median().clip(region)
+
+
+def _hls_index(region, kind):
+    """
+    Índice espectral desde el composite HLS armonizado (sin costuras):
+      NDVI = (NIR−Rojo)/(NIR+Rojo)
+      NDWI = (Verde−NIR)/(Verde+NIR)   (McFeeters)
+      NDTI = (Rojo−Verde)/(Rojo+Verde) (Lacaux, turbidez)
+    El NDTI se enmascara a AGUA (JRC occurrence > 30% ∪ NDWI > 0), porque la
+    turbidez solo tiene sentido físico sobre agua (sobre tierra el índice está
+    dominado por suelo/vegetación y se ve "mal").
+    """
+    hls = _hls_composite(region)
+    if kind == "ndvi":
+        return hls.normalizedDifference(["nir", "red"]).rename("NDVI")
+    ndwi = hls.normalizedDifference(["green", "nir"]).rename("NDWI")
+    if kind == "ndwi":
+        return ndwi
+    ndti = hls.normalizedDifference(["red", "green"]).rename("NDTI")
+    jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+           .select("occurrence").unmask(0))
+    water = jrc.gt(30).Or(ndwi.gt(0.0))
+    return ndti.updateMask(water)
+
+
 def _modis_index(region, kind):
     """
     Índices a ESCALA DE CUENCA GRANDE con MODIS (diseñado para escala
@@ -293,21 +345,21 @@ LAYER_META = {
     "ndvi": {
         "vmin": -0.2, "vmax": 0.85,
         "palette": ["#a50026", "#d73027", "#fdae61", "#a6d96a", "#1a9850", "#006837"],
-        "source": "Sentinel-2 L2A + Landsat 8/9 C2 — mediana 2020–2024, nubes enmascaradas",
+        "source": "HLS — Harmonized Landsat-Sentinel-2 (NASA) L30+S30 — mediana 2020–2024, Fmask",
         "title": "Índice de Vegetación Normalizado (NDVI)",
         "legend": "NDVI (−1 a +1)",
     },
     "ndwi": {
         "vmin": -0.5, "vmax": 0.5,
         "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
-        "source": "Sentinel-2 L2A + Landsat 8/9 C2 — mediana 2020–2024, nubes enmascaradas",
+        "source": "HLS — Harmonized Landsat-Sentinel-2 (NASA) L30+S30 — mediana 2020–2024, Fmask",
         "title": "Índice de Agua Normalizado (NDWI)",
         "legend": "NDWI (−1 a +1)",
     },
     "ndti": {
         "vmin": -0.3, "vmax": 0.45,
         "palette": ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#cc4c02"],
-        "source": "Sentinel-2 L2A + Landsat 8/9 C2 — mediana 2020–2024, nubes enmascaradas",
+        "source": "HLS (NASA) L30+S30 — mediana 2020–2024, Fmask · enmascarado a agua (JRC/NDWI)",
         "title": "Índice de Turbidez Normalizado (NDTI)",
         "legend": "NDTI (−1 a +1)",
     },
@@ -363,20 +415,17 @@ def _layer_image(map_type, region, radius_km=15.0):
     if map_type == "ndvi":
         if large:
             return _modis_index(region, "ndvi")
-        return _index_multisource(region, ("B8", "B4"),
-                                  ("SR_B5", "SR_B4"), "NDVI")
+        return _hls_index(region, "ndvi")
 
     if map_type == "ndwi":
         if large:
             return _modis_index(region, "ndwi")
-        return _index_multisource(region, ("B3", "B8"),
-                                  ("SR_B3", "SR_B5"), "NDWI")
+        return _hls_index(region, "ndwi")
 
     if map_type == "ndti":
         if large:
             return _modis_index(region, "ndti")
-        return _index_multisource(region, ("B4", "B3"),
-                                  ("SR_B4", "SR_B3"), "NDTI")
+        return _hls_index(region, "ndti")
 
     if map_type == "manning":
         lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(region)
