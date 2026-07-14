@@ -46,7 +46,8 @@ from utils.gee_handler import (
     get_map_url,
     get_landcover_at_point,
     get_ndti_turbidity,
-    get_channel_width
+    get_channel_width,
+    compute_rusle_point
 )
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
@@ -3009,6 +3010,25 @@ def channel_width():
         search_m = float(data.get("search_m", 300))
         result = get_channel_width(lat, lon, search_m=search_m)
         code = 200 if "width_m" in result else 422
+        return jsonify(result), code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/soil_loss", methods=["POST"])
+def soil_loss():
+    """Estima la pérdida de suelo RUSLE (A=R·K·LS·C·P) en el punto, vía GEE."""
+    if not GEE_AVAILABLE or not gee_ready():
+        return jsonify({"error": "Google Earth Engine no está disponible en este entorno."}), 503
+    try:
+        data = request.json or {}
+        lat = float(data["lat"])
+        lon = float(data["lon"])
+        r_formula = data.get("r_formula", "hurni")
+        if r_formula not in ("hurni", "lineal", "potencia"):
+            r_formula = "hurni"
+        result = compute_rusle_point(lat, lon, r_formula=r_formula)
+        code = 200 if "A" in result else 422
         return jsonify(result), code
     except Exception as e:
         return jsonify({"error": str(e)}), 400

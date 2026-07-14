@@ -314,6 +314,36 @@
           </div>
         </details>
 
+        <!-- Pérdida de suelos (RUSLE) -->
+        {% if gee_available %}
+        <details class="border border-lime-200 rounded-xl p-4 bg-lime-50/40 mb-5">
+          <summary class="text-xs font-bold text-lime-700 uppercase cursor-pointer select-none">
+            🌱 Pérdida de suelos — RUSLE (opcional)
+          </summary>
+          <p class="text-[11px] text-slate-500 mt-2 mb-3 leading-snug">
+            Estima A = R·K·LS·C·P (t·ha⁻¹·año⁻¹) en el punto del mapa con GEE
+            (CHIRPS, OpenLandMap, SRTM, Sentinel-2, WorldCover).
+          </p>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Fórmula de erosividad R</label>
+            <select id="rusle_formula"
+              class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-lime-500 outline-none bg-white">
+              <option value="hurni">Hurni (montaña árida/semiárida — Bolivia)</option>
+              <option value="lineal">Lineal (templado/subtropical)</option>
+              <option value="potencia">Potencia (intensidades extremas)</option>
+            </select>
+          </div>
+          <button type="button" id="soilLossBtn" onclick="fetchSoilLoss()"
+            class="mt-3 w-full text-xs bg-lime-100 hover:bg-lime-200 text-lime-800 font-semibold py-2 rounded-lg transition">
+            🌱 Estimar pérdida de suelo desde GEE
+          </button>
+          <div id="rusleResult" class="mt-3 hidden text-xs"></div>
+          <p class="mt-2 text-[10px] text-slate-400 leading-snug">
+            RUSLE da erosión potencial en ladera, no el aporte real de sedimento al cauce (para eso se usa un modelo SDR).
+          </p>
+        </details>
+        {% endif %}
+
         <!-- Calculate button -->
         <button id="calcBtn" onclick="calculateAll()"
           class="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700
@@ -756,6 +786,50 @@ async function fetchChannelWidth() {
     alert('No se pudo estimar el ancho: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = prev; }
+  }
+}
+
+// ── PÉRDIDA DE SUELO (RUSLE) DESDE GEE ────────────────────────────────────────
+async function fetchSoilLoss() {
+  const lat = parseFloat(document.getElementById('lat').value);
+  const lon = parseFloat(document.getElementById('lon').value);
+  const r_formula = document.getElementById('rusle_formula').value;
+  const btn = document.getElementById('soilLossBtn');
+  const out = document.getElementById('rusleResult');
+  const prev = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = '🌱 Consultando GEE…';
+  try {
+    const resp = await fetch('/soil_loss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon, r_formula })
+    });
+    const d = await resp.json();
+    if (d.error) throw new Error(d.error);
+    out.innerHTML = `
+      <div class="rounded-lg border p-3" style="border-color:${d.color}40; background:${d.color}12">
+        <div class="flex items-baseline justify-between mb-2">
+          <span class="font-bold text-slate-800">A = ${d.A} t·ha⁻¹·año⁻¹</span>
+          <span class="font-semibold" style="color:${d.color}">${d.severidad}</span>
+        </div>
+        <div class="grid grid-cols-5 gap-1 text-center text-[10px] mono text-slate-600">
+          <div><div class="font-bold">R</div>${d.R}</div>
+          <div><div class="font-bold">K</div>${d.K}</div>
+          <div><div class="font-bold">LS</div>${d.LS}</div>
+          <div><div class="font-bold">C</div>${d.C}</div>
+          <div><div class="font-bold">P</div>${d.P}</div>
+        </div>
+        <div class="mt-2 text-[10px] text-slate-400 leading-snug">
+          Pₐ=${d.precip_anual_mm} mm · textura ${d.clase_textura} · S=${d.slope_pct}% ·
+          NDVI=${d.ndvi} · ${d.es_cultivo ? 'cultivo' : 'no cultivo'} · R (${d.r_formula})
+        </div>
+      </div>`;
+    out.classList.remove('hidden');
+  } catch (e) {
+    out.innerHTML = `<span class="text-red-600">No se pudo estimar: ${e.message}</span>`;
+    out.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.innerHTML = prev;
   }
 }
 
