@@ -9,50 +9,96 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
+  :root {
+    --line: #e2e8f0;
+    --muted: #64748b;
+    --ring: rgba(37,99,235,.18);
+  }
   body { font-family: 'Inter', system-ui, sans-serif; }
   .mono { font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace; }
-  #map { height: 400px; }
+  #map { height: 100%; min-height: 380px; }
+
   @keyframes fadeUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
   .anim { animation: fadeUp 0.45s ease-out forwards; }
   .spin { animation: spin 1s linear infinite; }
   @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .bar-fill { transition: width 1s cubic-bezier(.4,0,.2,1); }
+
+  /* ── Form controls (consistent, low-noise) ── */
+  .lbl {
+    display:block; font-size:.72rem; line-height:1rem; color:var(--muted);
+    margin-bottom:.3rem; font-weight:500;
+  }
+  .lbl .hint { color:#94a3b8; font-weight:400; }
+  .inp, .sel {
+    width:100%; border:1px solid #cbd5e1; border-radius:.6rem;
+    padding:.55rem .7rem; font-size:.875rem; background:#fff; color:#0f172a;
+    outline:none; transition:border-color .15s, box-shadow .15s;
+  }
+  .inp:focus, .sel:focus { border-color:#3b82f6; box-shadow:0 0 0 3px var(--ring); }
+  .inp[readonly] { background:#f1f5f9; color:#64748b; cursor:default; }
+  .inp::placeholder { color:#b6c0cf; }
+
+  /* ── Section blocks inside the form ── */
+  .sec { border-top:1px solid var(--line); padding-top:1.1rem; margin-top:1.1rem; }
+  .sec:first-of-type { border-top:0; padding-top:0; margin-top:0; }
+  .sec-h {
+    display:flex; align-items:center; gap:.5rem; margin-bottom:.8rem;
+    font-size:.7rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#334155;
+  }
+  .sec-h .dot { width:.55rem; height:.55rem; border-radius:9999px; flex:none; }
+
+  /* ── Accordion (optional advanced blocks) ── */
+  details.acc { border:1px solid var(--line); border-radius:.9rem; background:#fff; overflow:hidden; }
+  details.acc > summary {
+    list-style:none; cursor:pointer; user-select:none;
+    display:flex; align-items:center; gap:.6rem; padding:.85rem 1rem;
+    font-size:.78rem; font-weight:700; color:#334155;
+  }
+  details.acc > summary::-webkit-details-marker { display:none; }
+  details.acc > summary .chev { margin-left:auto; transition:transform .2s; color:#94a3b8; }
+  details.acc[open] > summary .chev { transform:rotate(90deg); }
+  details.acc[open] > summary { border-bottom:1px solid var(--line); }
+  .acc-body { padding:1rem; }
+  .sub-h { font-size:.68rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:#94a3b8; margin:1rem 0 .55rem; }
+
+  .kv { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; }
 </style>
 </head>
-<body class="bg-slate-50 text-slate-800 min-h-screen">
+<body class="bg-slate-100 text-slate-800 min-h-screen">
 
 <!-- ══════ HEADER ══════ -->
-<header class="bg-gradient-to-br from-blue-950 via-blue-900 to-teal-900 text-white px-6 py-10 shadow-2xl">
-  <div class="max-w-7xl mx-auto">
-    <div class="flex flex-wrap items-start justify-between gap-4">
-      <div>
+<header class="bg-gradient-to-br from-blue-950 via-blue-900 to-teal-900 text-white shadow-xl">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-9">
+    <div class="flex flex-wrap items-start justify-between gap-6">
+      <div class="min-w-0">
         <div class="flex flex-wrap gap-2 mb-4">
-          <span class="bg-white/20 text-xs font-bold px-3 py-1 rounded-full tracking-wider">INGENIERÍA HIDRÁULICA</span>
-          <span class="bg-amber-400 text-amber-950 text-xs font-bold px-3 py-1 rounded-full">RAMIREZ QUISPE 2021</span>
+          <span class="bg-white/15 text-[11px] font-bold px-3 py-1 rounded-full tracking-wider">INGENIERÍA HIDRÁULICA</span>
+          <span class="bg-amber-400 text-amber-950 text-[11px] font-bold px-3 py-1 rounded-full">RAMIREZ QUISPE 2021</span>
           {% if gee_available %}
-          <span class="bg-emerald-400 text-emerald-950 text-xs font-bold px-3 py-1 rounded-full">● GEE ACTIVO</span>
+          <span class="bg-emerald-400 text-emerald-950 text-[11px] font-bold px-3 py-1 rounded-full">● GEE ACTIVO</span>
           {% else %}
-          <span class="bg-slate-500 text-slate-100 text-xs font-bold px-3 py-1 rounded-full">○ MODO MANUAL</span>
+          <span class="bg-slate-500 text-slate-100 text-[11px] font-bold px-3 py-1 rounded-full">○ MODO MANUAL</span>
           {% endif %}
         </div>
-        <h1 class="text-3xl md:text-4xl font-bold leading-tight">
+        <h1 class="text-3xl md:text-4xl font-bold leading-tight tracking-tight">
           Calculadora de Transporte<br>
           <span class="text-teal-300">de Sedimentos — Bolivia</span>
         </h1>
-        <p class="text-blue-200 mt-3 max-w-2xl text-sm leading-relaxed">
-          Modelos <strong class="text-white">Meyer-Peter &amp; Müller (1948)</strong>,
-          <strong class="text-white">Engelund-Hansen (1967)</strong> y
-          <strong class="text-white">Van Rijn (1984)</strong>.
+        <p class="text-blue-200/90 mt-3 max-w-2xl text-sm leading-relaxed">
+          Modelos <strong class="text-white font-semibold">Meyer-Peter &amp; Müller (1948)</strong>,
+          <strong class="text-white font-semibold">Engelund-Hansen (1967)</strong> y
+          <strong class="text-white font-semibold">Van Rijn (1984)</strong>.
           Criterio de Shields · Número de Rouse · Análisis de sensibilidad.
         </p>
       </div>
-      <div class="hidden xl:block bg-white/10 backdrop-blur rounded-xl p-4 text-xs border border-white/20">
+      <div class="hidden xl:block bg-white/10 backdrop-blur rounded-xl p-4 text-xs border border-white/15">
         <div class="font-bold text-teal-300 mb-2 text-sm">Clasificación de Sedimentos</div>
-        <table class="text-blue-100 mono leading-6">
-          <tr><td class="pr-3 text-slate-300">d₅₀ &lt; 0.0625 mm</td><td class="text-orange-300">Limo / Arcilla</td></tr>
-          <tr><td class="pr-3 text-slate-300">d₅₀ 0.0625 – 2 mm</td><td class="text-yellow-300">Arena (fina/media/gruesa)</td></tr>
-          <tr><td class="pr-3 text-slate-300">d₅₀ 2 – 64 mm</td><td class="text-slate-300">Grava (fina/gruesa)</td></tr>
-          <tr><td class="pr-3 text-slate-300">d₅₀ &gt; 64 mm</td><td class="text-blue-300">Canto rodado</td></tr>
+        <table class="text-blue-100 mono leading-7">
+          <tr><td class="pr-4 text-slate-300">d₅₀ &lt; 0.0625 mm</td><td class="text-orange-300">Limo / Arcilla</td></tr>
+          <tr><td class="pr-4 text-slate-300">d₅₀ 0.0625 – 2 mm</td><td class="text-yellow-300">Arena (fina/media/gruesa)</td></tr>
+          <tr><td class="pr-4 text-slate-300">d₅₀ 2 – 64 mm</td><td class="text-slate-300">Grava (fina/gruesa)</td></tr>
+          <tr><td class="pr-4 text-slate-300">d₅₀ &gt; 64 mm</td><td class="text-blue-300">Canto rodado</td></tr>
         </table>
       </div>
     </div>
@@ -63,166 +109,155 @@
 <main class="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
   <!-- INPUT + MAP -->
-  <div class="grid lg:grid-cols-5 gap-6 mb-8">
+  <div class="grid lg:grid-cols-5 gap-6 mb-8 items-start">
 
     <!-- ── FORM ── -->
-    <div class="lg:col-span-2">
+    <div class="lg:col-span-2 space-y-5">
       <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-        <h2 class="font-bold text-slate-900 mb-5 flex items-center gap-2">
-          <span class="bg-blue-600 text-white w-7 h-7 rounded-lg flex items-center justify-center text-sm font-bold">Σ</span>
-          Parámetros de Entrada
-        </h2>
+        <div class="flex items-center gap-2.5 mb-6">
+          <span class="bg-blue-600 text-white w-8 h-8 rounded-lg flex items-center justify-center text-base font-bold shrink-0">Σ</span>
+          <div>
+            <h2 class="font-bold text-slate-900 leading-tight">Parámetros de Entrada</h2>
+            <p class="text-xs text-slate-400">Datos de campo · aforos · granulometría</p>
+          </div>
+        </div>
 
         <!-- Location -->
-        <fieldset class="border border-blue-200 rounded-xl p-4 bg-blue-50/40 mb-4">
-          <legend class="text-xs font-bold text-blue-700 uppercase px-1">Ubicación WGS84</legend>
-          <div class="grid grid-cols-2 gap-3 mt-2">
+        <div class="sec">
+          <div class="sec-h"><span class="dot bg-blue-500"></span>Ubicación WGS84</div>
+          <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Latitud (°)</label>
-              <input type="number" id="lat" value="-16.5000" step="0.000001"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+              <label class="lbl">Latitud (°)</label>
+              <input type="number" id="lat" value="-16.5000" step="0.000001" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Longitud (°)</label>
-              <input type="number" id="lon" value="-68.1500" step="0.000001"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+              <label class="lbl">Longitud (°)</label>
+              <input type="number" id="lon" value="-68.1500" step="0.000001" class="inp mono">
             </div>
           </div>
           <p class="text-xs text-blue-500 mt-2">↙ Haga clic en el mapa para fijar la ubicación</p>
-        </fieldset>
+        </div>
 
         <!-- Granulometry -->
-        <fieldset class="border border-emerald-200 rounded-xl p-4 bg-emerald-50/40 mb-4">
-          <legend class="text-xs font-bold text-emerald-700 uppercase px-1">Granulometría</legend>
-          <div class="grid grid-cols-2 gap-3 mt-2">
+        <div class="sec">
+          <div class="sec-h"><span class="dot bg-emerald-500"></span>Granulometría</div>
+          <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">d₅₀ (mm)</label>
-              <input type="number" id="d50" value="0.45" step="0.001" min="0.001"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+              <label class="lbl">d₅₀ (mm)</label>
+              <input type="number" id="d50" value="0.45" step="0.001" min="0.001" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">d₉₀ (mm)</label>
-              <input type="number" id="d90" value="1.20" step="0.001" min="0.001"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-white">
+              <label class="lbl">d₉₀ (mm)</label>
+              <input type="number" id="d90" value="1.20" step="0.001" min="0.001" class="inp mono">
             </div>
           </div>
-          <div id="particleBadge" class="mt-2 text-xs font-semibold"></div>
-        </fieldset>
+          <div id="particleBadge" class="mt-2.5 text-xs font-semibold"></div>
+        </div>
 
         <!-- Physical -->
-        <fieldset class="border border-amber-200 rounded-xl p-4 bg-amber-50/40 mb-4">
-          <legend class="text-xs font-bold text-amber-700 uppercase px-1">Propiedades Físicas</legend>
-          <div class="grid grid-cols-2 gap-3 mt-2">
+        <div class="sec">
+          <div class="sec-h"><span class="dot bg-amber-500"></span>Propiedades Físicas</div>
+          <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">ρₛ sólido (kg/m³)</label>
-              <input type="number" id="rho_s" value="2650" step="1"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">ρₛ sólido (kg/m³)</label>
+              <input type="number" id="rho_s" value="2650" step="1" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Temperatura (°C)</label>
-              <input type="number" id="temp" value="20" step="0.5" min="0" max="50"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Temperatura (°C)</label>
+              <input type="number" id="temp" value="20" step="0.5" min="0" max="50" class="inp mono">
             </div>
           </div>
-        </fieldset>
+        </div>
 
         <!-- Hydraulic -->
-        <fieldset class="border border-sky-200 rounded-xl p-4 bg-sky-50/40 mb-4">
-          <legend class="text-xs font-bold text-sky-700 uppercase px-1">Datos Hidráulicos de Campo</legend>
-          <div class="grid grid-cols-2 gap-3 mt-2">
+        <div class="sec">
+          <div class="sec-h"><span class="dot bg-sky-500"></span>Datos Hidráulicos de Campo</div>
+          <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Tirante y (m)</label>
-              <input type="number" id="depth" value="1.00" step="0.01" min="0.01"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 outline-none bg-white">
+              <label class="lbl">Tirante y (m)</label>
+              <input type="number" id="depth" value="1.00" step="0.01" min="0.01" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Velocidad v (m/s)</label>
-              <input type="number" id="velocity" value="1.00" step="0.01" min="0.01"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 outline-none bg-white">
+              <label class="lbl">Velocidad v (m/s)</label>
+              <input type="number" id="velocity" value="1.00" step="0.01" min="0.01" class="inp mono">
             </div>
           </div>
-        </fieldset>
+        </div>
 
         <!-- Slope -->
-        <fieldset class="border border-violet-200 rounded-xl p-4 bg-violet-50/40 mb-5">
-          <legend class="text-xs font-bold text-violet-700 uppercase px-1">Pendiente del Lecho</legend>
-          <div class="grid grid-cols-2 gap-3 mt-2">
+        <div class="sec">
+          <div class="sec-h"><span class="dot bg-violet-500"></span>Pendiente del Lecho</div>
+          <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">S (m/m)</label>
-              <input type="number" id="slope" value="0.00500" step="0.00001" min="0.000001"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-violet-500 outline-none bg-white">
+              <label class="lbl">S (m/m)</label>
+              <input type="number" id="slope" value="0.00500" step="0.00001" min="0.000001" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">S (%)</label>
-              <input type="number" id="slope_pct" value="0.500" step="0.001"
-                class="w-full mono border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 text-slate-500" readonly>
+              <label class="lbl">S (%) <span class="hint">auto</span></label>
+              <input type="number" id="slope_pct" value="0.500" step="0.001" class="inp mono" readonly>
             </div>
           </div>
           {% if gee_available %}
           <button type="button" onclick="fetchGEEData()"
-            class="mt-3 w-full text-xs bg-violet-100 hover:bg-violet-200 text-violet-800 font-semibold py-2 rounded-lg transition">
+            class="mt-3 w-full text-xs bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 font-semibold py-2 rounded-lg transition">
             🛰 Obtener pendiente desde GEE (SRTM)
           </button>
           {% endif %}
-        </fieldset>
+        </div>
+      </div>
 
-        <!-- Socavación (opcional) -->
-        <details class="border border-amber-200 rounded-xl p-4 bg-amber-50/40 mb-5">
-          <summary class="text-xs font-bold text-amber-700 uppercase cursor-pointer select-none">
-            ⚠ Socavación en puentes (opcional)
-          </summary>
-          <p class="text-[11px] text-slate-500 mt-2 mb-3 leading-snug">
+      <!-- Socavación (opcional) -->
+      <details class="acc">
+        <summary>
+          <span class="text-amber-500">⚠</span>
+          <span>Socavación en puentes <span class="text-slate-400 font-medium">· opcional</span></span>
+          <svg class="chev w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </summary>
+        <div class="acc-body">
+          <p class="text-[11px] text-slate-500 mb-3 leading-snug">
             Complete solo los campos que necesite. Cada método se calcula si tiene sus datos.
           </p>
 
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Caudal Q (m³/s)</label>
-              <input type="number" id="caudal" step="0.1" min="0" placeholder="p.ej. 120"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Caudal Q (m³/s)</label>
+              <input type="number" id="caudal" step="0.1" min="0" placeholder="p.ej. 120" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Ancho cauce B (m)</label>
-              <input type="number" id="ancho_b" step="0.1" min="0" placeholder="espejo de agua"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Ancho cauce B (m)</label>
+              <input type="number" id="ancho_b" step="0.1" min="0" placeholder="espejo de agua" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Ancho contraído W₂ (m)</label>
-              <input type="number" id="ancho_w2" step="0.1" min="0" placeholder="bajo el puente"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Ancho contraído W₂ (m)</label>
+              <input type="number" id="ancho_w2" step="0.1" min="0" placeholder="bajo el puente" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Periodo retorno Tr (años)</label>
-              <input type="number" id="periodo_retorno" step="1" min="1" value="100"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Periodo retorno Tr (años)</label>
+              <input type="number" id="periodo_retorno" step="1" min="1" value="100" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Tipo de suelo</label>
-              <select id="tipo_suelo"
-                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Tipo de suelo</label>
+              <select id="tipo_suelo" class="sel">
                 <option value="no_cohesivo">No cohesivo (arenas/gravas)</option>
                 <option value="cohesivo">Cohesivo</option>
               </select>
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">γs seco (t/m³) <span class="text-slate-400">cohesivo</span></label>
-              <input type="number" id="gamma_s" step="0.01" min="0" placeholder="1.4"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">γs seco (t/m³) <span class="hint">cohesivo</span></label>
+              <input type="number" id="gamma_s" step="0.01" min="0" placeholder="1.4" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Claro entre pilas (m) <span class="text-slate-400">μ</span></label>
-              <input type="number" id="claro_pilas" step="0.1" min="0" placeholder="luz del vano"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Claro entre pilas (m) <span class="hint">μ</span></label>
+              <input type="number" id="claro_pilas" step="0.1" min="0" placeholder="luz del vano" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">γ mezcla (t/m³) <span class="text-slate-400">ψ</span></label>
-              <input type="number" id="gamma_mezcla" step="0.01" min="1" placeholder="1.00–1.40"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">γ mezcla (t/m³) <span class="hint">ψ</span></label>
+              <input type="number" id="gamma_mezcla" step="0.01" min="1" placeholder="1.00–1.40" class="inp mono">
             </div>
           </div>
           {% if gee_available %}
           <button type="button" id="channelWidthBtn" onclick="fetchChannelWidth()"
-            class="mt-3 w-full text-xs bg-sky-100 hover:bg-sky-200 text-sky-800 font-semibold py-2 rounded-lg transition">
+            class="mt-3 w-full text-xs bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 font-semibold py-2 rounded-lg transition">
             🛰 Estimar ancho B desde GEE (JRC Global Surface Water)
           </button>
           <p class="mt-1 text-[10px] text-slate-400 leading-snug">
@@ -230,17 +265,15 @@
           </p>
           {% endif %}
 
-          <div class="text-[11px] font-bold text-amber-700 uppercase mt-4 mb-1">Pila</div>
+          <div class="sub-h">Pila</div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Ancho pila b (m)</label>
-              <input type="number" id="pila_ancho" step="0.05" min="0" placeholder="p.ej. 1.5"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Ancho pila b (m)</label>
+              <input type="number" id="pila_ancho" step="0.05" min="0" placeholder="p.ej. 1.5" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Forma nariz</label>
-              <select id="pila_forma"
-                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Forma nariz</label>
+              <select id="pila_forma" class="sel">
                 <option value="circular">Circular (Ks=1.00)</option>
                 <option value="rectangular">Rectangular (Ks=1.10)</option>
                 <option value="rect_semicircular">Rect. + extremo semicircular (Ks=0.90)</option>
@@ -252,38 +285,32 @@
               </select>
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Ángulo ataque θ (°)</label>
-              <input type="number" id="pila_theta" step="1" min="0" max="90" value="0"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Ángulo ataque θ (°)</label>
+              <input type="number" id="pila_theta" step="1" min="0" max="90" value="0" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Largo pila L (m)</label>
-              <input type="number" id="pila_largo" step="0.1" min="0" placeholder="para K₂/Kω"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Largo pila L (m)</label>
+              <input type="number" id="pila_largo" step="0.1" min="0" placeholder="para K₂/Kω" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">K₁ Laursen-Toch <span class="text-slate-400">auto Fig.21</span></label>
-              <input type="number" id="pila_k1" step="0.01" min="0" placeholder="auto por h/b (override)"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">K₁ Laursen-Toch <span class="hint">auto Fig.21</span></label>
+              <input type="number" id="pila_k1" step="0.01" min="0" placeholder="auto por h/b (override)" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">K₃ Laursen-Toch <span class="text-slate-400">auto Fig.22</span></label>
-              <input type="number" id="pila_k3" step="0.01" min="0" placeholder="auto por φ, a/b (override)"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">K₃ Laursen-Toch <span class="hint">auto Fig.22</span></label>
+              <input type="number" id="pila_k3" step="0.01" min="0" placeholder="auto por φ, a/b (override)" class="inp mono">
             </div>
           </div>
 
-          <div class="text-[11px] font-bold text-amber-700 uppercase mt-4 mb-1">Estribo</div>
+          <div class="sub-h">Estribo</div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Longitud estribo L (m)</label>
-              <input type="number" id="estribo_l" step="0.1" min="0" placeholder="proyectada al flujo"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Longitud estribo L (m)</label>
+              <input type="number" id="estribo_l" step="0.1" min="0" placeholder="proyectada al flujo" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Forma estribo (ABC)</label>
-              <select id="estribo_forma"
-                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Forma estribo (ABC)</label>
+              <select id="estribo_forma" class="sel">
                 <option value="vertical">Pared vertical (Ks=1.00)</option>
                 <option value="vertical_semicircular">Vertical + nariz semicircular (Ks=0.75)</option>
                 <option value="vertical_aletas">Vertical con aletas (Ks=0.75)</option>
@@ -294,79 +321,85 @@
               </select>
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Ángulo esviaje φ (°)</label>
-              <input type="number" id="estribo_theta" step="1" min="0" max="180" value="90"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Ángulo esviaje φ (°)</label>
+              <input type="number" id="estribo_theta" step="1" min="0" max="180" value="90" class="inp mono">
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Régimen estribo</label>
-              <select id="estribo_regimen"
-                class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Régimen estribo</label>
+              <select id="estribo_regimen" class="sel">
                 <option value="movil">Lecho móvil</option>
                 <option value="clara">Agua clara</option>
               </select>
             </div>
             <div>
-              <label class="block text-xs text-slate-500 mb-1">Relación Q₁/Q <span class="text-slate-400">Artamonov</span></label>
-              <input type="number" id="estribo_q1q" step="0.01" min="0.1" max="0.8" placeholder="0.10–0.80"
-                class="w-full mono border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none bg-white">
+              <label class="lbl">Relación Q₁/Q <span class="hint">Artamonov</span></label>
+              <input type="number" id="estribo_q1q" step="0.01" min="0.1" max="0.8" placeholder="0.10–0.80" class="inp mono">
             </div>
           </div>
-        </details>
+        </div>
+      </details>
 
-        <!-- Pérdida de suelos (RUSLE) -->
-        {% if gee_available %}
-        <details class="border border-lime-200 rounded-xl p-4 bg-lime-50/40 mb-5">
-          <summary class="text-xs font-bold text-lime-700 uppercase cursor-pointer select-none">
-            🌱 Pérdida de suelos — RUSLE (opcional)
-          </summary>
-          <p class="text-[11px] text-slate-500 mt-2 mb-3 leading-snug">
+      <!-- Pérdida de suelos (RUSLE) -->
+      {% if gee_available %}
+      <details class="acc">
+        <summary>
+          <span class="text-lime-500">🌱</span>
+          <span>Pérdida de suelos — RUSLE <span class="text-slate-400 font-medium">· opcional</span></span>
+          <svg class="chev w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </summary>
+        <div class="acc-body">
+          <p class="text-[11px] text-slate-500 mb-3 leading-snug">
             Estima A = R·K·LS·C·P (t·ha⁻¹·año⁻¹) en el punto del mapa con GEE
             (CHIRPS, OpenLandMap, SRTM, Sentinel-2, WorldCover).
           </p>
           <div>
-            <label class="block text-xs text-slate-500 mb-1">Fórmula de erosividad R</label>
-            <select id="rusle_formula"
-              class="w-full border border-slate-300 rounded-lg px-2 py-2 text-sm focus:ring-2 focus:ring-lime-500 outline-none bg-white">
+            <label class="lbl">Fórmula de erosividad R</label>
+            <select id="rusle_formula" class="sel">
               <option value="hurni">Hurni (montaña árida/semiárida — Bolivia)</option>
               <option value="lineal">Lineal (templado/subtropical)</option>
               <option value="potencia">Potencia (intensidades extremas)</option>
             </select>
           </div>
           <button type="button" id="soilLossBtn" onclick="fetchSoilLoss()"
-            class="mt-3 w-full text-xs bg-lime-100 hover:bg-lime-200 text-lime-800 font-semibold py-2 rounded-lg transition">
+            class="mt-3 w-full text-xs bg-lime-50 hover:bg-lime-100 text-lime-700 border border-lime-200 font-semibold py-2 rounded-lg transition">
             🌱 Estimar pérdida de suelo desde GEE
           </button>
           <div id="rusleResult" class="mt-3 hidden text-xs"></div>
           <p class="mt-2 text-[10px] text-slate-400 leading-snug">
             RUSLE da erosión potencial en ladera, no el aporte real de sedimento al cauce (para eso se usa un modelo SDR).
           </p>
-        </details>
-        {% endif %}
+        </div>
+      </details>
+      {% endif %}
 
-        <!-- Calculate button -->
-        <button id="calcBtn" onclick="calculateAll()"
-          class="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700
-                 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all duration-200
-                 flex items-center justify-center gap-2 text-sm">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0120 9.414V19a2 2 0 01-2 2z"/>
-          </svg>
-          CALCULAR TRANSPORTE DE SEDIMENTOS
-        </button>
-      </div>
+      <!-- Calculate button -->
+      <button id="calcBtn" onclick="calculateAll()"
+        class="w-full bg-gradient-to-r from-blue-600 to-teal-600 hover:from-blue-700 hover:to-teal-700
+               text-white font-bold py-3.5 rounded-xl shadow-lg transition-all duration-200
+               flex items-center justify-center gap-2 text-sm">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0120 9.414V19a2 2 0 01-2 2z"/>
+        </svg>
+        CALCULAR TRANSPORTE DE SEDIMENTOS
+      </button>
     </div>
 
     <!-- ── MAP ── -->
-    <div class="lg:col-span-3">
-      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden h-full flex flex-col">
+    <div class="lg:col-span-3 lg:sticky lg:top-6">
+      <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
         <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
-          <span class="font-semibold text-slate-700 text-sm">Ubicación en el Mapa</span>
-          <span class="text-xs text-slate-400 mono" id="mapCoords">-16.5000°, -68.1500°</span>
+          <span class="font-semibold text-slate-700 text-sm flex items-center gap-2">
+            <svg class="w-4 h-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a2 2 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+              <circle cx="12" cy="11" r="2.5" stroke-width="2"/>
+            </svg>
+            Ubicación en el Mapa
+          </span>
+          <span class="text-xs text-slate-500 mono bg-slate-100 px-2 py-0.5 rounded" id="mapCoords">-16.5000°, -68.1500°</span>
         </div>
-        <div id="map" class="flex-1"></div>
-        <div class="px-4 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-400 flex gap-2 items-center">
+        <div id="map"></div>
+        <div class="px-4 py-2.5 bg-slate-50 border-t border-slate-100 text-xs text-slate-400 flex gap-2 items-center">
           <svg class="w-4 h-4 text-blue-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
               d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5"/>
@@ -379,6 +412,13 @@
 
   <!-- ══════ RESULTS (oculto hasta calcular) ══════ -->
   <div id="results" class="hidden space-y-6">
+
+    <!-- Section heading -->
+    <div class="flex items-center gap-3">
+      <div class="h-px flex-1 bg-slate-200"></div>
+      <span class="text-xs font-bold text-slate-400 uppercase tracking-widest">Resultados del Análisis</span>
+      <div class="h-px flex-1 bg-slate-200"></div>
+    </div>
 
     <!-- Status ribbon -->
     <div id="statusBar" class="rounded-xl p-4 border anim flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -396,85 +436,85 @@
     <!-- Properties cards -->
     <div class="grid md:grid-cols-3 gap-4 anim">
       <!-- Fluid -->
-      <div class="bg-white rounded-xl border border-slate-200 p-5 hover:-translate-y-0.5 transition">
-        <div class="text-xs font-bold text-blue-600 uppercase mb-3 pb-2 border-b border-slate-100">
-          Propiedades del Fluido
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 hover:-translate-y-0.5 hover:shadow-md transition">
+        <div class="text-xs font-bold text-blue-600 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100 flex items-center gap-2">
+          <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>Propiedades del Fluido
         </div>
         <div class="space-y-2.5">
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">ρ<sub>w</sub> densidad agua</span>
-            <span class="mono text-sm font-semibold" id="r_rho_w">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_rho_w">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">ν viscosidad cinemática</span>
-            <span class="mono text-sm font-semibold" id="r_nu">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_nu">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">s gravedad específica</span>
-            <span class="mono text-sm font-semibold" id="r_s">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_s">--</span>
           </div>
         </div>
       </div>
 
       <!-- Particle -->
-      <div class="bg-white rounded-xl border border-slate-200 p-5 hover:-translate-y-0.5 transition">
-        <div class="text-xs font-bold text-emerald-600 uppercase mb-3 pb-2 border-b border-slate-100">
-          Parámetros de Partícula
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 hover:-translate-y-0.5 hover:shadow-md transition">
+        <div class="text-xs font-bold text-emerald-600 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100 flex items-center gap-2">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Parámetros de Partícula
         </div>
         <div class="space-y-2.5">
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">wₛ vel. de caída (Van Rijn)</span>
-            <span class="mono text-sm font-semibold" id="r_ws">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_ws">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">D* parámetro adim.</span>
-            <span class="mono text-sm font-semibold" id="r_dstar">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_dstar">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">τ<sub>c</sub> esfuerzo crítico</span>
-            <span class="mono text-sm font-semibold" id="r_tau_c">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_tau_c">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">θ<sub>c</sub> Shields crítico</span>
-            <span class="mono text-sm font-semibold" id="r_theta_c">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_theta_c">--</span>
           </div>
         </div>
       </div>
 
       <!-- Hydraulic state -->
-      <div class="bg-white rounded-xl border border-slate-200 p-5 hover:-translate-y-0.5 transition">
-        <div class="text-xs font-bold text-sky-600 uppercase mb-3 pb-2 border-b border-slate-100">
-          Estado Hidráulico
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 hover:-translate-y-0.5 hover:shadow-md transition">
+        <div class="text-xs font-bold text-sky-600 uppercase tracking-wide mb-3 pb-2 border-b border-slate-100 flex items-center gap-2">
+          <span class="w-1.5 h-1.5 rounded-full bg-sky-500"></span>Estado Hidráulico
         </div>
         <div class="space-y-2.5">
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">τ₀ esfuerzo de fondo</span>
-            <span class="mono text-sm font-semibold" id="r_tau0">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_tau0">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">θ₀ Shields actuante</span>
-            <span class="mono text-sm font-semibold" id="r_theta0">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_theta0">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">u* vel. de corte</span>
-            <span class="mono text-sm font-semibold" id="r_ustar">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_ustar">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">Fr Número de Froude</span>
-            <span class="mono text-sm font-semibold" id="r_froude">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_froude">--</span>
           </div>
-          <div class="flex justify-between">
+          <div class="kv">
             <span class="text-sm text-slate-500">Z Número de Rouse</span>
-            <span class="mono text-sm font-semibold" id="r_rouse">--</span>
+            <span class="mono text-sm font-semibold text-slate-900" id="r_rouse">--</span>
           </div>
         </div>
       </div>
     </div>
 
     <!-- Shields mobility bar -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 anim">
-      <div class="text-xs font-bold text-slate-600 uppercase mb-4">Criterio de Shields — Movilidad del Sedimento</div>
-      <div class="relative mb-1">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 anim">
+      <div class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-5">Criterio de Shields — Movilidad del Sedimento</div>
+      <div class="relative mb-1 pt-6">
         <div class="h-7 bg-gradient-to-r from-green-100 via-yellow-200 to-red-300 rounded-full relative overflow-visible">
           <!-- Critical threshold marker -->
           <div id="shieldsCritLine" class="absolute top-0 h-full w-0.5 bg-orange-600 z-10" style="left:50%">
@@ -490,26 +530,26 @@
           </div>
         </div>
       </div>
-      <div class="flex justify-between text-xs text-slate-500 mb-3">
+      <div class="flex justify-between text-xs text-slate-500 mb-4">
         <span class="text-green-700 font-semibold">✓ Sin movimiento</span>
         <span class="text-red-600 font-semibold">⚡ Transporte activo</span>
       </div>
-      <div class="text-xs text-slate-500 mono">
-        θ₀ = <span class="font-bold" id="s_theta0">--</span> &nbsp;|&nbsp;
-        θ_c = <span class="font-bold" id="s_thetac">--</span> &nbsp;|&nbsp;
-        Ratio θ₀/θ_c = <span class="font-bold" id="s_ratio">--</span>x
+      <div class="text-xs text-slate-500 mono bg-slate-50 rounded-lg px-3 py-2 border border-slate-100">
+        θ₀ = <span class="font-bold text-slate-800" id="s_theta0">--</span> &nbsp;|&nbsp;
+        θ_c = <span class="font-bold text-slate-800" id="s_thetac">--</span> &nbsp;|&nbsp;
+        Ratio θ₀/θ_c = <span class="font-bold text-slate-800" id="s_ratio">--</span>x
       </div>
     </div>
 
     <!-- Chart + Model Cards -->
     <div class="grid lg:grid-cols-2 gap-6 anim">
-      <div class="bg-white rounded-xl border border-slate-200 p-5">
-        <div class="text-xs font-bold text-slate-600 uppercase mb-4">Comparación de Modelos [kg/(m·s)]</div>
+      <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+        <div class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-4">Comparación de Modelos [kg/(m·s)]</div>
         <canvas id="transportChart"></canvas>
       </div>
 
       <div class="space-y-3">
-        <div class="bg-white rounded-xl border border-slate-200 border-l-4 border-l-blue-600 p-5 hover:-translate-y-0.5 transition">
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-blue-600 p-5 hover:-translate-y-0.5 hover:shadow-md transition">
           <div class="flex justify-between items-start mb-2">
             <div>
               <div class="font-bold text-sm text-slate-900">Meyer-Peter &amp; Müller (1948)</div>
@@ -525,7 +565,7 @@
           </div>
         </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 border-l-4 border-l-emerald-600 p-5 hover:-translate-y-0.5 transition">
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-emerald-600 p-5 hover:-translate-y-0.5 hover:shadow-md transition">
           <div class="flex justify-between items-start mb-2">
             <div>
               <div class="font-bold text-sm text-slate-900">Engelund-Hansen (1967)</div>
@@ -541,7 +581,7 @@
           </div>
         </div>
 
-        <div class="bg-white rounded-xl border border-slate-200 border-l-4 border-l-violet-600 p-5 hover:-translate-y-0.5 transition">
+        <div class="bg-white rounded-xl border border-slate-200 shadow-sm border-l-4 border-l-violet-600 p-5 hover:-translate-y-0.5 hover:shadow-md transition">
           <div class="flex justify-between items-start mb-2">
             <div>
               <div class="font-bold text-sm text-slate-900">Van Rijn (1984)</div>
@@ -560,9 +600,9 @@
     </div>
 
     <!-- Sensitivity table -->
-    <div class="bg-white rounded-xl border border-slate-200 p-5 anim">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm p-5 anim">
       <div class="flex items-center justify-between mb-4">
-        <div class="text-xs font-bold text-slate-600 uppercase">Análisis de Sensibilidad — Transporte vs Tirante</div>
+        <div class="text-xs font-bold text-slate-600 uppercase tracking-wide">Análisis de Sensibilidad — Transporte vs Tirante</div>
         <span class="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded">v y S constantes</span>
       </div>
       <div class="overflow-x-auto">
@@ -581,9 +621,9 @@
     </div>
 
     <!-- Socavación (shown only when methods computed) -->
-    <div id="scourSection" class="hidden bg-white rounded-xl border border-amber-200 p-5 anim">
+    <div id="scourSection" class="hidden bg-white rounded-xl border border-amber-200 shadow-sm p-5 anim">
       <div class="flex items-center gap-2 mb-1">
-        <span class="text-xs font-bold text-amber-700 uppercase">⚠ Socavación en Puentes</span>
+        <span class="text-xs font-bold text-amber-700 uppercase tracking-wide">⚠ Socavación en Puentes</span>
       </div>
       <p class="text-[11px] text-slate-400 mb-4">
         Profundidades por método. General/contracción = descenso del fondo; pila/estribo = socavación local al pie.
@@ -596,8 +636,8 @@
     </div>
 
     <!-- GEE maps (shown only when GEE active) -->
-    <div id="geeSection" class="hidden bg-white rounded-xl border border-slate-200 p-5 anim">
-      <div class="text-xs font-bold text-slate-600 uppercase mb-4">Datos Geoespaciales — Google Earth Engine</div>
+    <div id="geeSection" class="hidden bg-white rounded-xl border border-slate-200 shadow-sm p-5 anim">
+      <div class="text-xs font-bold text-slate-600 uppercase tracking-wide mb-4">Datos Geoespaciales — Google Earth Engine</div>
       <div class="grid md:grid-cols-3 gap-4 mb-4">
         <div class="bg-violet-50 rounded-lg p-3 border border-violet-100">
           <div class="text-xs font-bold text-violet-700 mb-1">Pendiente SRTM</div>
@@ -616,7 +656,7 @@
     </div>
 
     <!-- Technical note + Report button -->
-    <div class="bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl p-6 anim">
+    <div class="bg-gradient-to-r from-slate-800 to-slate-900 rounded-xl shadow-sm p-6 anim">
       <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <div class="font-bold text-white mb-1 flex items-center gap-2">

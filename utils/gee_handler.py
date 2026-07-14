@@ -890,56 +890,85 @@ def get_ndti_turbidity(lat, lon):
     return val.get("nd", 0.0)
 
 
+def _measure_halfwidth(water, point, radius_m, scale):
+    """Semi-anchura (m) = máx. distancia a la orilla dentro del radio, o None
+    si no hay agua en la ventana. `water` es máscara 0/1 (1 = agua)."""
+    land = water.Not()
+    dist_m = (land.fastDistanceTransform(256).sqrt()
+              .multiply(scale)
+              .updateMask(water)
+              .rename("halfw"))
+    stats = dist_m.reduceRegion(
+        reducer=ee.Reducer.max(),
+        geometry=point.buffer(radius_m),
+        scale=scale,
+        maxPixels=int(1e8),
+        bestEffort=True,
+    ).getInfo()
+    return stats.get("halfw")
+
+
 def get_channel_width(lat, lon, search_m=300, occurrence_pct=50, scale=30):
     """
-    Estima el ancho del cauce B (m) a partir de la máscara de agua permanente
-    del JRC Global Surface Water (1984–2021).
+    Estima el ancho del cauce B (m) desde una máscara de agua.
 
-    Método: se toma el agua permanente (occurrence ≥ occurrence_pct %), se
-    calcula la transformada de distancia hacia la orilla más cercana (banco)
-    y se toma el MÁXIMO dentro de un radio `search_m` alrededor del punto: ese
-    máximo corresponde a la línea central del cauce y equivale a la SEMI-anchura.
-    El ancho es 2× esa distancia.
+    Método: se calcula la transformada de distancia hacia la orilla más cercana
+    (banco) y se toma el MÁXIMO dentro de un radio alrededor del punto (línea
+    central = SEMI-anchura); B = 2× esa distancia.
 
-    Es una APROXIMACIÓN objetiva y multitemporal (útil para B, B_e, W1, W2 de
-    Lischtvan-Lebediev y contracción), no un levantamiento topográfico. Limita:
-    - Un píxel JRC/Landsat es de 30 m; cauces < ~30 m de ancho no se resuelven.
-    - En confluencias o cerca de lagos puede sobrestimar (reducir `search_m`).
-    - No ve bajo el agua: no reemplaza batimetría.
+    Robustez: los ríos bolivianos (andinos, trenzados, estacionales) a menudo no
+    alcanzan una permanencia alta en el JRC Global Surface Water, así que se
+    prueba una CASCADA de umbrales de `occurrence` y radios crecientes, y si nada
+    aparece, se usa un respaldo con NDWI de Sentinel-2 (mediana reciente). La
+    respuesta indica qué método/umbral/radio funcionó.
 
-    Devuelve un dict {width_m, half_width_m, source, note} o {error}.
+    Limita: un píxel es de ~30 m (cauces < ~30 m no se resuelven); cerca de lagos
+    puede sobrestimar; no ve bajo el agua (no reemplaza batimetría).
+
+    Devuelve {width_m, half_width_m, source, note} o {error}.
     """
     try:
         point = ee.Geometry.Point([lon, lat])
         gsw = ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
-        water = gsw.select("occurrence").gte(occurrence_pct)
-        # Distancia (en píxeles²) de cada píxel al agua-NO (tierra=1 tras Not()).
-        # Para un píxel de agua da la distancia al banco más cercano.
-        land = water.Not()
-        dist_m = (land.fastDistanceTransform(256).sqrt()
-                  .multiply(scale)
-                  .updateMask(water)
-                  .rename("halfw"))
-        stats = dist_m.reduceRegion(
-            reducer=ee.Reducer.max(),
-            geometry=point.buffer(search_m),
-            scale=scale,
-            maxPixels=int(1e8),
-            bestEffort=True,
-        ).getInfo()
-        half = stats.get("halfw")
-        if half is None:
-            return {"error": "No se encontró agua permanente cerca del punto "
-                             "(JRC GSW). Verifique las coordenadas o use un radio mayor."}
-        width = round(2.0 * float(half), 1)
-        return {
-            "width_m": width,
-            "half_width_m": round(float(half), 1),
-            "source": "JRC Global Surface Water 1984–2021 (occurrence ≥ "
-                      f"{occurrence_pct}%), transformada de distancia a {scale} m",
-            "note": "Aproximación multitemporal; verificar con levantamiento. "
-                    "No resuelve cauces < ~30 m ni reemplaza batimetría.",
-        }
+        occ = gsw.select("occurrence").unmask(0)
+
+        # Cascada JRC: (umbral %, radio m). De permanente/estrecho a
+        # ocasional/amplio, para captar ríos estacionales o mal geolocalizados.
+        for thr, rad in [(occurrence_pct, search_m), (25, search_m),
+                         (25, search_m * 2), (10, search_m * 2),
+                         (10, search_m * 4)]:
+            half = _measure_halfwidth(occ.gte(thr), point, rad, scale)
+            if half is not None:
+                w = round(2.0 * float(half), 1)
+                return {
+                    "width_m": w, "half_width_m": round(float(half), 1),
+                    "source": f"JRC Global Surface Water 1984–2021 "
+                              f"(occurrence ≥ {thr}%), radio {rad} m, {scale} m",
+                    "note": "Aproximación multitemporal; verificar con "
+                            "levantamiento. No resuelve cauces < ~30 m.",
+                }
+
+        # Respaldo NDWI (McFeeters) con Sentinel-2 (mediana 2020–2024).
+        rad = search_m * 4
+        s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+              .filterBounds(point.buffer(rad))
+              .filterDate("2020-01-01", "2024-12-31")
+              .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+              .median())
+        ndwi = s2.normalizedDifference(["B3", "B8"])   # verde, NIR
+        half = _measure_halfwidth(ndwi.gt(0.0), point, rad, 10)
+        if half is not None:
+            w = round(2.0 * float(half), 1)
+            return {
+                "width_m": w, "half_width_m": round(float(half), 1),
+                "source": f"NDWI Sentinel-2 (mediana 2020–2024), radio {rad} m, 10 m",
+                "note": "Respaldo NDWI (no había agua en JRC). Verificar con "
+                        "levantamiento; cerca de lagos puede sobrestimar.",
+            }
+
+        return {"error": "No se encontró agua cerca del punto ni en JRC Global "
+                         "Surface Water ni en NDWI Sentinel-2. Verifique que el "
+                         "punto caiga sobre el cauce (haga clic sobre el río)."}
     except Exception as e:
         return {"error": f"Error GEE al estimar el ancho: {e}"}
 
