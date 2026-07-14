@@ -942,3 +942,79 @@ def get_channel_width(lat, lon, search_m=300, occurrence_pct=50, scale=30):
         }
     except Exception as e:
         return {"error": f"Error GEE al estimar el ancho: {e}"}
+
+
+def compute_rusle_point(lat, lon, r_formula="hurni", buffer_m=150,
+                        years=("2014-01-01", "2024-01-01")):
+    """
+    Estima la pérdida de suelo RUSLE (A = R·K·LS·C·P) en el punto, obteniendo
+    los cinco factores desde GEE y combinándolos con models.rusle.
+
+    Fuentes:
+        R  → CHIRPS (precip. media anual) + fórmula empírica (Hurni por defecto)
+        K  → OpenLandMap clase de textura USDA
+        LS → Copernicus/SRTM (pendiente) → factor S de McCool
+        C  → NDVI Sentinel-2 (van der Knijff)
+        P  → ESA WorldCover (cultivo) × pendiente
+
+    Devuelve el desglose de factores + A, o {error}. Verificable en el Space.
+    """
+    from models.rusle import compute_rusle
+    try:
+        point = ee.Geometry.Point([lon, lat])
+        region = point.buffer(buffer_m)
+        start, end = years
+        n_years = max(1, (int(end[:4]) - int(start[:4])))
+
+        # R — precipitación media anual (mm) desde CHIRPS
+        chirps = (ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+                  .filterDate(start, end).select("precipitation").sum())
+        pa_total = chirps.reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=region, scale=5000,
+            maxPixels=int(1e8), bestEffort=True).getInfo().get("precipitation")
+        precip_anual = (pa_total / n_years) if pa_total else 0.0
+
+        # K — clase de textura USDA (OpenLandMap, 0 cm)
+        textura = (ee.Image("OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02")
+                   .select("b0"))
+        clase_tex = textura.reduceRegion(
+            reducer=ee.Reducer.mode(), geometry=region, scale=250,
+            maxPixels=int(1e8), bestEffort=True).getInfo().get("b0") or 6
+
+        # LS — pendiente (%) desde SRTM
+        dem = ee.Image("USGS/SRTMGL1_003")
+        slope_deg = ee.Terrain.slope(dem).reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=region, scale=30,
+            maxPixels=int(1e8), bestEffort=True).getInfo().get("slope") or 0.0
+        slope_pct = math.tan(math.radians(slope_deg)) * 100.0
+
+        # C — NDVI Sentinel-2 (mediana anual, nubes < 20 %)
+        s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+              .filterBounds(region).filterDate(start, end)
+              .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20)).median())
+        ndvi = s2.normalizedDifference(["B8", "B4"]).reduceRegion(
+            reducer=ee.Reducer.mean(), geometry=region, scale=10,
+            maxPixels=int(1e8), bestEffort=True).getInfo().get("nd") or 0.0
+
+        # P — ¿cultivo? (ESA WorldCover clase 40 = cropland)
+        lc = (ee.Image("ESA/WorldCover/v100/2020").select("Map")
+              .reduceRegion(reducer=ee.Reducer.mode(), geometry=region,
+                            scale=10, maxPixels=int(1e8), bestEffort=True)
+              .getInfo().get("Map"))
+        es_cultivo = (lc == 40)
+
+        res = compute_rusle(precip_anual, clase_tex, slope_pct, ndvi,
+                            es_cultivo=es_cultivo, r_formula=r_formula)
+        res.update({
+            "precip_anual_mm": round(precip_anual, 1),
+            "clase_textura": int(clase_tex),
+            "slope_pct": round(slope_pct, 2),
+            "ndvi": round(ndvi, 3),
+            "es_cultivo": bool(es_cultivo),
+            "source": "CHIRPS + OpenLandMap + SRTM + Sentinel-2 + ESA WorldCover",
+            "note": "Estimación puntual (buffer local). RUSLE da erosión "
+                    "potencial en ladera, no el aporte real al cauce (usar SDR).",
+        })
+        return res
+    except Exception as e:
+        return {"error": f"Error GEE al estimar RUSLE: {e}"}
