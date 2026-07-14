@@ -57,7 +57,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v36-escala-modis-rios"
+APP_VERSION = "v37-s2-cloudscore-indices"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
