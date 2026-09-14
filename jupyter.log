@@ -1,0 +1,23 @@
+[C 2026-09-14 05:50:00.965 ServerApp] received signal 15, stopping
+[I 2026-09-14 05:50:00.966 ServerApp] Shutting down 4 extensions
+[I 2026-09-14 05:50:04.777 ServerApp] jupyter_lsp | extension was successfully linked.
+[I 2026-09-14 05:50:04.783 ServerApp] jupyter_server_terminals | extension was successfully linked.
+[W 2026-09-14 05:50:04.785 LabApp] 'token' has moved from NotebookApp to ServerApp. This config will be passed to ServerApp. Be sure to update your config before our next release.
+[W 2026-09-14 05:50:04.785 LabApp] 'password' has moved from NotebookApp to ServerApp. This config will be passed to ServerApp. Be sure to update your config before our next release.
+[W 2026-09-14 05:50:04.789 ServerApp] ServerApp.token config is deprecated in 2.0. Use IdentityProvider.token.
+[I 2026-09-14 05:50:04.790 ServerApp] jupyterlab | extension was successfully linked.
+[I 2026-09-14 05:50:04.846 ServerApp] notebook_shim | extension was successfully linked.
+[W 2026-09-14 05:50:04.872 ServerApp] All authentication is disabled.  Anyone who can connect to this server will be able to run code.
+[I 2026-09-14 05:50:04.873 ServerApp] notebook_shim | extension was successfully loaded.
+[I 2026-09-14 05:50:04.876 ServerApp] jupyter_lsp | extension was successfully loaded.
+[I 2026-09-14 05:50:04.877 ServerApp] jupyter_server_terminals | extension was successfully loaded.
+[I 2026-09-14 05:50:04.880 LabApp] JupyterLab extension loaded from /home/jules/.pyenv/versions/3.12.13/lib/python3.12/site-packages/jupyterlab
+[I 2026-09-14 05:50:04.880 LabApp] JupyterLab application directory is /home/jules/.pyenv/versions/3.12.13/share/jupyter/lab
+[I 2026-09-14 05:50:04.881 LabApp] Extension Manager is 'pypi'.
+[I 2026-09-14 05:50:04.951 ServerApp] jupyterlab | extension was successfully loaded.
+[I 2026-09-14 05:50:04.952 ServerApp] Serving notebooks from local directory: /app
+[I 2026-09-14 05:50:04.952 ServerApp] Jupyter Server 2.21.0 is running at:
+[I 2026-09-14 05:50:04.952 ServerApp] http://0.0.0.0:3000/lab
+[I 2026-09-14 05:50:04.952 ServerApp]     http://127.0.0.1:3000/lab
+[I 2026-09-14 05:50:04.952 ServerApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
+[I 2026-09-14 05:50:05.128 ServerApp] Skipped non-installed server(s): basedpyright, bash-language-server, dockerfile-language-server-nodejs, javascript-typescript-langserver, jedi-language-server, julia-language-server, pyrefly, pyright, python-language-server, python-lsp-server, r-languageserver, sql-language-server, texlab, typescript-language-server, unified-language-server, vscode-css-languageserver-bin, vscode-html-languageserver-bin, vscode-json-languageserver-bin, yaml-language-server
