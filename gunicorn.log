@@ -1,0 +1,30 @@
+[2026-09-14 04:58:38 +0000] [50803] [INFO] Starting gunicorn 21.2.0
+[2026-09-14 04:58:38 +0000] [50803] [INFO] Listening at: http://0.0.0.0:3000 (50803)
+[2026-09-14 04:58:38 +0000] [50803] [INFO] Using worker: sync
+[2026-09-14 04:58:38 +0000] [50923] [INFO] Booting worker with pid: 50923
+[2026-09-14 04:58:38 +0000] [50925] [INFO] Booting worker with pid: 50925
+[2026-09-14 05:44:30 +0000] [50803] [CRITICAL] WORKER TIMEOUT (pid:50923)
+[2026-09-14 05:44:30 +0000] [50803] [CRITICAL] WORKER TIMEOUT (pid:50925)
+[2026-09-14 05:44:30 +0000] [50925] [INFO] Worker exiting (pid: 50925)
+[2026-09-14 05:44:30 +0000] [50923] [INFO] Worker exiting (pid: 50923)
+[2026-09-14 05:44:32 +0000] [50803] [ERROR] Worker (pid:50923) was sent SIGKILL! Perhaps out of memory?
+[2026-09-14 05:44:32 +0000] [50803] [ERROR] Worker (pid:50925) was sent SIGKILL! Perhaps out of memory?
+[2026-09-14 05:44:32 +0000] [55940] [INFO] Booting worker with pid: 55940
+[2026-09-14 05:44:32 +0000] [55941] [INFO] Booting worker with pid: 55941
+[2026-09-14 05:49:17 +0000] [55940] [INFO] Worker exiting (pid: 55940)
+[2026-09-14 05:49:17 +0000] [55941] [INFO] Worker exiting (pid: 55941)
+[2026-09-14 05:49:17 +0000] [50803] [INFO] Handling signal: term
+GEE Initialization failed: Please authorize access to your Earth Engine account by running
+
+earthengine authenticate
+
+in your command line, or ee.Authenticate() in Python, and then retry.
+Geoprocess JIT warmup completado.
+GEE Initialization failed: Please authorize access to your Earth Engine account by running
+
+earthengine authenticate
+
+in your command line, or ee.Authenticate() in Python, and then retry.
+Geoprocess JIT warmup completado.
+[2026-09-14 05:49:17 +0000] [50803] [ERROR] Worker (pid:55940) was sent SIGTERM!
+[2026-09-14 05:49:18 +0000] [50803] [INFO] Shutting down: Master
