@@ -57,7 +57,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v38-mndwi-cloudscore-cdf"
+APP_VERSION = "v39-creditos-frava"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -368,6 +368,7 @@ def generate_charts(r):
 # ════════════════════════════════════════════════════════════════════════════
 
 MAP_AUTHOR = "Ing. Luis Franco Guarachi"
+MAP_CREATOR = "www.frava.tech"
 
 # Fuentes satelitales por tipo de mapa
 MAP_SOURCES = {
@@ -1814,6 +1815,7 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         ('ESCALA APROX.:', f'1 : {int(radius_km * 2000 / 14 * 25.4 / 25.4 * 50):,}'),
         ('AUTOR:', MAP_AUTHOR),
         ('FECHA:', datetime.now().strftime('%d/%m/%Y')),
+        ('CREADOR:', MAP_CREATOR),
         ('PROGRAMA:', 'Sedimentos Bolivia — GEE/Matplotlib'),
     ]
     y_pos = legend_sep_y - 0.03
@@ -1843,7 +1845,8 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     # ── Bottom cartouche ──────────────────────────────────────────────────
     src_foot = src if len(src) <= 70 else src[:68].rstrip() + "…"
     fig.text(0.06, 0.005,
-             f'Autor: {MAP_AUTHOR}   |   Fecha: {datetime.now().strftime("%d/%m/%Y")}   |   '
+             f'Autor: {MAP_AUTHOR}   |   Creador: {MAP_CREATOR}   |   '
+             f'Fecha: {datetime.now().strftime("%d/%m/%Y")}   |   '
              f'Fuente: {src_foot}   |   Datum: WGS84   |   Lat {point_lat:.4f}°, Lon {point_lon:.4f}°',
              ha='left', va='bottom', fontsize=6.5, color='#333')
 
@@ -1992,6 +1995,7 @@ def generate_gee_code(lat, lon, d50, d90):
 ║   ANÁLISIS MORFOLÓGICO FLUVIAL — GOOGLE EARTH ENGINE PYTHON API             ║
 ║   Sedimentos Bolivia | Punto: LAT=<<LAT>>, LON=<<LON>>                      ║
 ║   d₅₀=<<D50>> mm | d₉₀=<<D90>> mm                                          ║
+║   Creado por: www.frava.tech                                                 ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║   Ecosistema de herramientas integradas:                                     ║
 ║   ├─ GEE Python API  → procesamiento y análisis satelital                   ║
@@ -3055,6 +3059,7 @@ def maps_view():
             map_titles=MAP_TITLES,
             map_sources=map_sources,
             author=MAP_AUTHOR,
+            creator=MAP_CREATOR,
             date=datetime.now().strftime("%d/%m/%Y"),
             maps_source=("real" if gee_ready() else "synthetic"),
             app_version=APP_VERSION,
