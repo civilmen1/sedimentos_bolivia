@@ -850,10 +850,10 @@ table tfoot td {
   <h2>8.2 Análisis de Pendiente Satelital</h2>
   <p>La pendiente del lecho S = {{ results.slope }} m/m se obtiene del Modelo Digital de Elevación SRTM (resolución 30 m), procesado mediante la función ee.Terrain.slope() en GEE. La conversión de grados a m/m emplea la relación trigonométrica S = tan(α), que proporciona mayor precisión que la aproximación lineal S ≈ α (radianes) para pendientes superiores al 5%.</p>
 
-  <h2>8.3 Índice de Turbidez NDTI</h2>
-  <p>El Índice Normalizado de Turbidez (NDTI) se calcula a partir de las bandas roja (B4) y verde (B3) del satélite Sentinel-2, sensibles a la concentración de sedimentos en suspensión (Lacaux et al., 2007):</p>
-  <div class="eq-block">$$NDTI = \frac{\rho_{Red} - \rho_{Green}}{\rho_{Red} + \rho_{Green}} = \frac{B4 - B3}{B4 + B3}$$</div>
-  <p>Valores de NDTI &gt; 0.1 indican alta carga de sedimentos en suspensión, mientras valores negativos corresponden a aguas claras. El análisis temporal permite identificar pulsos de turbidez asociados a eventos de crecida.</p>
+  <h2>8.3 Turbidez del Agua (FNU) — Nechad/Dogliotti</h2>
+  <p>La turbidez se estima en unidades físicas (FNU ≈ NTU) mediante el algoritmo semi-analítico de banda única de Nechad (2010/2016) y Dogliotti et al. (2015), aplicado sobre la reflectancia de superficie de Sentinel-2 y enmascarado a agua (MNDWI ∪ JRC):</p>
+  <div class="eq-block">$$T = \frac{A\,\rho_w}{1 - \rho_w/C}\;[\text{FNU}]\qquad \text{rojo (B4): } A=228.1,\ C=0.1641;\quad \text{NIR (B8): } A=3078.9,\ C=0.2112$$</div>
+  <p>Se emplea la banda roja para turbidez baja-media y se conmuta a la banda NIR en aguas muy turbias (ρ_rojo &gt; 0.07), con mezcla lineal en la transición. Los coeficientes son genéricos (tablas de Nechad); dan un valor FNU de primer orden útil para el patrón espacial. Para uso cuantitativo conviene <strong>validar localmente</strong> con datos de campo (HYBAM Rurrenabaque, río Beni).</p>
 
   <h2>8.4 Cobertura y Uso del Suelo</h2>
   <p>La clasificación de cobertura ESA WorldCover 2021 (resolución 10 m) proporciona el coeficiente de Manning asociado a cada unidad de uso del suelo, parámetro clave para la estimación de la resistencia al flujo en la cuenca y para la aplicación de modelos de erosión tipo USLE/RUSLE (Wischmeier y Smith, 1978). Las clases dominantes en el área de estudio se identifican en el Mapa 4 del Apéndice E.</p>
@@ -879,7 +879,7 @@ table tfoot td {
       <tr><td><strong>Morf04</strong> — Cobertura ESA WorldCover</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Clasificación de 11 clases de uso del suelo; Manning's n asociado</td></tr>
       <tr><td><strong>Morf05</strong> — NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Vegetación de Diferencia Normalizada (B8–B4)/(B8+B4); mediana 2020–2023</td></tr>
       <tr><td><strong>Morf06</strong> — NDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Agua de Diferencia Normalizada (B3–B8)/(B3+B8); cuerpos de agua &gt; 0</td></tr>
-      <tr><td><strong>Morf07</strong> — NDTI Turbidez</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice Normalizado de Turbidez (B4–B3)/(B4+B3); proxy de carga en suspensión</td></tr>
+      <tr><td><strong>Morf07</strong> — Turbidez (FNU)</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Turbidez Nechad/Dogliotti en FNU≈NTU; enmascarada a agua; validar con HYBAM</td></tr>
       <tr><td><strong>Morf08</strong> — Manning's n</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Coeficiente de rugosidad de Manning reclasificado por tipo de cobertura</td></tr>
       <tr><td><strong>Morf09</strong> — Número de Curva CN</td><td>ESA WorldCover + SRTM</td><td class="td-num">10 m</td><td>Curva Número SCS-CN para cálculo de escorrentía directa (AMC II)</td></tr>
       <tr><td><strong>Morf10</strong> — Inundación JRC</td><td>JRC Global Surface Water</td><td class="td-num">30 m</td><td>Frecuencia de ocurrencia de agua superficial 1984–2021 (0–100%)</td></tr>
@@ -973,7 +973,7 @@ table tfoot td {
   <p>El código fuente de la aplicación de cálculo está disponible en el repositorio GitHub del proyecto. Los modelos implementados siguen las ecuaciones documentadas en Ramirez Quispe (2021). Para acceder al código fuente completo, visitar: [URL del repositorio].</p>
 
   <h2>Apéndice E: Mapas Temáticos de Google Earth Engine</h2>
-  <p>Los mapas temáticos se obtienen automáticamente desde Google Earth Engine y se presentan en la Sección 8.6 de este informe y en la galería accesible desde "Ver Mapas". El primer mapa delimita la cuenca a partir del DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) mediante geoproceso hidrológico con pyflwdir (D8: relleno de depresiones, dirección y acumulación de flujo, cuenca de aporte y cauce principal). Los mapas siguientes muestran: DEM (SRTM 30 m), Pendiente, NDVI, NDWI, NDTI (Sentinel-2 10 m, mediana 2020–2023), Coeficiente de Manning (ESA WorldCover 10 m) e Índice de Riesgo + Frecuencia de Inundación JRC, todos recortados a la cuenca y con el parteaguas (rojo), el cauce principal (azul oscuro) y la red de drenaje (azul) superpuestos, además de flecha norte, barra de escala y cartela de autoría en proyección UTM WGS84.</p>
+  <p>Los mapas temáticos se obtienen automáticamente desde Google Earth Engine y se presentan en la Sección 8.6 de este informe y en la galería accesible desde "Ver Mapas". El primer mapa delimita la cuenca a partir del DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) mediante geoproceso hidrológico con pyflwdir (D8: relleno de depresiones, dirección y acumulación de flujo, cuenca de aporte y cauce principal). Los mapas siguientes muestran: DEM (SRTM 30 m), Pendiente, NDVI, MNDWI (agua), Turbidez FNU (Nechad/Dogliotti) (Sentinel-2 10 m), Coeficiente de Manning (ESA WorldCover 10 m) e Índice de Riesgo + Frecuencia de Inundación JRC, todos recortados a la cuenca y con el parteaguas (rojo), el cauce principal (azul oscuro) y la red de drenaje (azul) superpuestos, además de flecha norte, barra de escala y cartela de autoría en proyección UTM WGS84.</p>
 
   <h2>Apéndice F: Fotografías del Sitio</h2>
   <p>[Adjuntar fotografías de: (1) sección transversal aforada, (2) material de lecho y muestras, (3) condiciones de flujo aguas arriba y aguas abajo, (4) obras de infraestructura cercanas.]</p>

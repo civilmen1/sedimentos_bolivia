@@ -272,6 +272,43 @@ def _s2_index(region, kind, start="2021-01-01", end="2025-01-01"):
     return ndti.updateMask(jrc.gt(30).Or(mndwi.gt(0.0)))
 
 
+def _s2_turbidity(region, start="2021-01-01", end="2025-01-01"):
+    """
+    Turbidez del agua en FNU (≈ NTU) — algoritmo semi-analítico de banda única
+    Nechad (2010/2016) / Dogliotti et al. (2015), sobre Sentinel-2 SR:
+
+        T = A·ρ / (1 − ρ/C)   [FNU]
+        rojo (B4, 665 nm): A = 228.1,  C = 0.1641   (turbidez baja-media)
+        NIR  (B8, 842 nm): A = 3078.9, C = 0.2112   (turbidez alta)
+        conmutación: ρ_rojo < 0.05 → rojo · > 0.07 → NIR · mezcla lineal entre medio.
+
+    ρ = reflectancia de superficie S2 (×0.0001, acotada < C para estabilidad).
+    Enmascarado a agua (MNDWI > 0 ∪ JRC occurrence > 30%). Cloud Score+ (cs_cdf).
+
+    Los coeficientes son genéricos (LUT de Nechad): dan FNU de primer orden
+    válidos para el patrón espacial; para uso cuantitativo conviene VALIDAR con
+    datos de campo (HYBAM Rurrenabaque, río Beni).
+    """
+    csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
+    s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+          .filterBounds(region).filterDate(start, end)
+          .linkCollection(csp, ["cs_cdf"])
+          .map(lambda i: i.updateMask(i.select("cs_cdf").gte(0.60)))
+          .median())
+    red = s2.select("B4").multiply(0.0001).min(0.16)    # ρ acotada < C_rojo
+    nir = s2.select("B8").multiply(0.0001).min(0.205)   # ρ acotada < C_NIR
+    t_red = red.multiply(228.1).divide(ee.Image(1.0).subtract(red.divide(0.1641)))
+    t_nir = nir.multiply(3078.9).divide(ee.Image(1.0).subtract(nir.divide(0.2112)))
+    w = red.subtract(0.05).divide(0.02).clamp(0.0, 1.0)   # peso NIR
+    turb = (t_red.multiply(ee.Image(1.0).subtract(w))
+            .add(t_nir.multiply(w)).max(0.0).rename("TURB"))
+    mndwi = s2.normalizedDifference(["B3", "B11"])
+    jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+           .select("occurrence").unmask(0))
+    water = jrc.gt(30).Or(mndwi.gt(0.0))
+    return turb.updateMask(water).clip(region)
+
+
 def _hls_index(region, kind):
     """
     Índice espectral desde el composite HLS armonizado (sin costuras):
@@ -392,11 +429,11 @@ LAYER_META = {
         "legend": "MNDWI (−1 a +1)",
     },
     "ndti": {
-        "vmin": -0.3, "vmax": 0.45,
+        "vmin": 0, "vmax": 80,
         "palette": ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#cc4c02"],
-        "source": "Sentinel-2 L2A (10 m) — mediana 2021–2024, Cloud Score+ · enmascarado a agua (JRC/NDWI)",
-        "title": "Índice de Turbidez Normalizado (NDTI)",
-        "legend": "NDTI (−1 a +1)",
+        "source": "Sentinel-2 L2A (10 m) — Turbidez FNU Nechad/Dogliotti · Cloud Score+ · agua (MNDWI/JRC)",
+        "title": "Turbidez del Agua (FNU) — Nechad/Dogliotti",
+        "legend": "Turbidez (FNU ≈ NTU)",
     },
     "manning": {
         "vmin": 0.02, "vmax": 0.12,
@@ -460,7 +497,7 @@ def _layer_image(map_type, region, radius_km=15.0):
     if map_type == "ndti":
         if large:
             return _modis_index(region, "ndti")
-        return _s2_index(region, "ndti")
+        return _s2_turbidity(region)
 
     if map_type == "manning":
         lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(region)

@@ -57,7 +57,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v39-creditos-frava"
+APP_VERSION = "v40-turbidez-fnu-nechad"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -400,7 +400,7 @@ MAP_TITLES = {
     'slope':   "Pendiente del Terreno (S, m/m)",
     'ndvi':    "Índice de Vegetación Normalizado (NDVI)",
     'ndwi':    "Índice de Agua Modificado (MNDWI — Xu 2006)",
-    'ndti':    "Índice de Turbidez Normalizado (NDTI)",
+    'ndti':    "Turbidez del Agua (FNU) — Nechad/Dogliotti",
     'manning': "Coeficiente de Manning (n) — ESA WorldCover",
     'risk':    "Índice Compuesto de Riesgo Hidrosedimentológico",
     'jrc':     "Frecuencia de Inundación — JRC Global Surface Water",
@@ -412,7 +412,7 @@ MAP_LEGEND_LABELS = {
     'slope':   "Pendiente (m/m)",
     'ndvi':    "NDVI (−1 a +1)",
     'ndwi':    "NDWI (−1 a +1)",
-    'ndti':    "NDTI (−1 a +1)",
+    'ndti':    "Turbidez (FNU ≈ NTU)",
     'manning': "n de Manning",
     'risk':    "Índice de Riesgo (0–1)",
     'jrc':     "Frecuencia de inundación (%)",
