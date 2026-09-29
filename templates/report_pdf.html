@@ -310,9 +310,9 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <p>La plataforma Google Earth Engine (GEE) permite el análisis satelital de la dinámica sedimentaria mediante Sentinel-2, Landsat 8/9, SRTM y ESA WorldCover. Para el área de estudio se generaron <strong>15 capas GeoTIFF</strong> y <strong>4 tablas CSV</strong> exportadas a la carpeta GEE_Sedimentos_Bolivia en Google Drive (Tabla 6). Las capas cubren geomorfología, cobertura del suelo, índices espectrales, condiciones hidrológicas e índices de riesgo a escala de cauce (2 km) y cuenca (15 km).</p>
 <h2>8.2 Pendiente Satelital</h2>
 <p>S = {{ results.slope }} m/m obtenida del DEM SRTM 30 m mediante ee.Terrain.slope() en GEE, convertida con S = tan(α).</p>
-<h2>8.3 Índice NDTI</h2>
-<p class="eq">NDTI = (ρ_Red − ρ_Green) / (ρ_Red + ρ_Green) = (B4 − B3) / (B4 + B3)</p>
-<p>Valores NDTI &gt; 0.1 indican alta carga de sedimentos en suspensión. La serie temporal Sentinel-2 permite identificar pulsos de turbidez asociados a eventos de crecida.</p>
+<h2>8.3 Turbidez del Agua (FNU) — Nechad/Dogliotti</h2>
+<p class="eq">T = A·ρ_w / (1 − ρ_w/C) [FNU]   ·   rojo B4: A=228.1, C=0.1641   ·   NIR B8: A=3078.9, C=0.2112</p>
+<p>Turbidez en unidades físicas (FNU ≈ NTU) por el algoritmo semi-analítico de banda única (Nechad 2010/2016; Dogliotti et al. 2015) sobre Sentinel-2, enmascarada a agua (MNDWI ∪ JRC). Coeficientes genéricos: patrón espacial de primer orden; validar con datos de campo (HYBAM Rurrenabaque).</p>
 
 <h2>8.4 Catálogo de Capas GEE</h2>
 <p class="no-indent" style="text-indent:0; margin-top:1em;"><span class="tbl-title">Tabla 6</span></p>
