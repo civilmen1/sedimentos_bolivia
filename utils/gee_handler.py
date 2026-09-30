@@ -121,6 +121,10 @@ def gee_status(probe=False):
         except Exception as e:
             status["probe"] = "failed"
             status["probe_error"] = str(e)
+    # Resultado de la última generación de mapas: qué capas fallaron en GEE
+    # (y por qué) y con qué composite salieron las que sí fueron reales.
+    status["last_layer_errors"] = dict(_LAST_ERRORS)
+    status["last_layer_modes"] = dict(_LAST_MODE)
     return status
 
 
@@ -237,42 +241,80 @@ def _hls_composite(region, start="2020-01-01", end="2025-01-01"):
     return l30.merge(s30).median().clip(region)
 
 
-def _s2_index(region, kind, start="2021-01-01", end="2025-01-01"):
+# Solo las bandas que usan los índices (verde, rojo, NIR, SWIR1): la mediana
+# sobre 4 bandas en vez de ~23 reduce mucho el cómputo y el riesgo de timeout.
+_S2_BANDS = ["B3", "B4", "B8", "B11"]
+
+
+def _s2_composite(region, light=False):
     """
-    Índice espectral desde Sentinel-2 SR SOLO (10 m) — un único sensor, sin
-    costuras. Máscara de nubes con Cloud Score+ (banda cs_cdf, umbral 0.60;
-    recomendado por el catálogo GEE, superior a SCL en trópicos). Mediana.
+    Composite Sentinel-2 SR (10 m) LIVIANO y sin nubes para los índices.
+
+    La versión anterior tomaba TODAS las escenas de 4 años sin prefiltro de
+    nubes (cientos a más de mil imágenes) y les hacía mediana: GEE excedía el
+    tiempo/memoria del thumbnail, la excepción se tragaba y el mapa caía en
+    silencio al respaldo SINTÉTICO (los tres índices salían idénticos).
+
+    Modo normal  : estación seca andino-amazónica (mayo–septiembre) 2022–2024,
+                   escenas con < 20 % de nubes, máscara SCL por píxel, MEDIANA.
+    Modo `light` : reintento barato si la mediana excede el tiempo — escenas
+                   < 60 % de nubes 2022–2024, máscara SCL, MOSAICO (la escena más
+                   despejada queda arriba y las nubes se rellenan con la siguiente).
+    Sin linkCollection / Cloud Score+ (un join más que podía fallar).
+    """
+    col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+           .filterBounds(region)
+           .filterDate("2022-01-01", "2025-01-01"))
+    if not light:
+        col = (col.filter(ee.Filter.calendarRange(5, 9, "month"))
+                  .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+                  .map(_mask_s2_clouds)
+                  .select(_S2_BANDS))
+        return col.median().clip(region)
+    col = (col.filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+              .map(_mask_s2_clouds)
+              .select(_S2_BANDS)
+              .sort("CLOUDY_PIXEL_PERCENTAGE", False))
+    return col.mosaic().clip(region)
+
+
+def _s2_scene_count(region):
+    """Nº de escenas Sentinel-2 que pasan el filtro del composite normal."""
+    return (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(region)
+            .filterDate("2022-01-01", "2025-01-01")
+            .filter(ee.Filter.calendarRange(5, 9, "month"))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+            .size())
+
+
+def _water_mask(s2):
+    """Agua = MNDWI > 0 (Xu 2006) ∪ JRC Global Surface Water occurrence > 30 %."""
+    mndwi = s2.normalizedDifference(["B3", "B11"])
+    jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
+           .select("occurrence").unmask(0))
+    return jrc.gt(30).Or(mndwi.gt(0.0))
+
+
+def _s2_index(region, kind, light=False):
+    """
+    Índice espectral desde el composite Sentinel-2 (un único sensor, 10 m).
 
     Fórmulas verificadas (citas originales):
-      NDVI  (Rouse 1974):  (B8−B4)/(B8+B4)        = (NIR−Rojo)
-      MNDWI (Xu 2006):     (B3−B11)/(B3+B11)       = (Verde−SWIR1)
-      NDTI  (Lacaux 2007): (B4−B3)/(B4+B3)         = (Rojo−Verde), turbidez
+      NDVI  (Rouse 1974):  (B8−B4)/(B8+B4)   = (NIR−Rojo)
+      MNDWI (Xu 2006):     (B3−B11)/(B3+B11) = (Verde−SWIR1)
 
     Para el AGUA se usa MNDWI (Xu 2006) en vez de NDWI-McFeeters: Satgé et al.
     (2017, Lago Poopó) mostró que NDWI subestima el agua somera y turbia del
-    Altiplano boliviano; MNDWI/AWEI/WRI son más exactos. El NDTI (turbidez) se
-    enmascara a agua (JRC occurrence>30% ∪ MNDWI>0), pues no tiene sentido físico
-    sobre tierra. NOTA: NDTI no está calibrado en Bolivia — es un proxy relativo.
+    Altiplano boliviano; MNDWI/AWEI/WRI son más exactos.
     """
-    csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
-    s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-          .filterBounds(region).filterDate(start, end)
-          .linkCollection(csp, ["cs_cdf"])
-          .map(lambda i: i.updateMask(i.select("cs_cdf").gte(0.60)))
-          .median().clip(region))
+    s2 = _s2_composite(region, light=light)
     if kind == "ndvi":
         return s2.normalizedDifference(["B8", "B4"]).rename("NDVI")
-    # Índice de agua = MNDWI (verde−SWIR1), óptimo para Bolivia
-    mndwi = s2.normalizedDifference(["B3", "B11"]).rename("MNDWI")
-    if kind == "ndwi":
-        return mndwi
-    ndti = s2.normalizedDifference(["B4", "B3"]).rename("NDTI")
-    jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
-           .select("occurrence").unmask(0))
-    return ndti.updateMask(jrc.gt(30).Or(mndwi.gt(0.0)))
+    return s2.normalizedDifference(["B3", "B11"]).rename("MNDWI")
 
 
-def _s2_turbidity(region, start="2021-01-01", end="2025-01-01"):
+def _s2_turbidity(region, light=False):
     """
     Turbidez del agua en FNU (≈ NTU) — algoritmo semi-analítico de banda única
     Nechad (2010/2016) / Dogliotti et al. (2015), sobre Sentinel-2 SR:
@@ -283,18 +325,12 @@ def _s2_turbidity(region, start="2021-01-01", end="2025-01-01"):
         conmutación: ρ_rojo < 0.05 → rojo · > 0.07 → NIR · mezcla lineal entre medio.
 
     ρ = reflectancia de superficie S2 (×0.0001, acotada < C para estabilidad).
-    Enmascarado a agua (MNDWI > 0 ∪ JRC occurrence > 30%). Cloud Score+ (cs_cdf).
-
-    Los coeficientes son genéricos (LUT de Nechad): dan FNU de primer orden
-    válidos para el patrón espacial; para uso cuantitativo conviene VALIDAR con
-    datos de campo (HYBAM Rurrenabaque, río Beni).
+    Solo tiene sentido físico sobre AGUA: se enmascara con MNDWI > 0 ∪ JRC > 30 %.
+    Los coeficientes son genéricos (LUT de Nechad): dan FNU de primer orden para
+    el patrón espacial; para uso cuantitativo conviene VALIDAR con datos de campo
+    (HYBAM Rurrenabaque, río Beni).
     """
-    csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
-    s2 = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-          .filterBounds(region).filterDate(start, end)
-          .linkCollection(csp, ["cs_cdf"])
-          .map(lambda i: i.updateMask(i.select("cs_cdf").gte(0.60)))
-          .median())
+    s2 = _s2_composite(region, light=light)
     red = s2.select("B4").multiply(0.0001).min(0.16)    # ρ acotada < C_rojo
     nir = s2.select("B8").multiply(0.0001).min(0.205)   # ρ acotada < C_NIR
     t_red = red.multiply(228.1).divide(ee.Image(1.0).subtract(red.divide(0.1641)))
@@ -302,11 +338,7 @@ def _s2_turbidity(region, start="2021-01-01", end="2025-01-01"):
     w = red.subtract(0.05).divide(0.02).clamp(0.0, 1.0)   # peso NIR
     turb = (t_red.multiply(ee.Image(1.0).subtract(w))
             .add(t_nir.multiply(w)).max(0.0).rename("TURB"))
-    mndwi = s2.normalizedDifference(["B3", "B11"])
-    jrc = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
-           .select("occurrence").unmask(0))
-    water = jrc.gt(30).Or(mndwi.gt(0.0))
-    return turb.updateMask(water).clip(region)
+    return turb.updateMask(_water_mask(s2)).clip(region)
 
 
 def _hls_index(region, kind):
@@ -417,21 +449,21 @@ LAYER_META = {
     "ndvi": {
         "vmin": -0.2, "vmax": 0.85,
         "palette": ["#a50026", "#d73027", "#fdae61", "#a6d96a", "#1a9850", "#006837"],
-        "source": "Sentinel-2 L2A (10 m) — mediana 2021–2024, nubes Cloud Score+",
+        "source": "Sentinel-2 L2A (10 m) — NDVI (Rouse 1974), mediana estación seca may–sep 2022–2024, escenas <20 % nubes, máscara SCL",
         "title": "Índice de Vegetación Normalizado (NDVI)",
         "legend": "NDVI (−1 a +1)",
     },
     "ndwi": {
         "vmin": -0.5, "vmax": 0.5,
         "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
-        "source": "Sentinel-2 L2A (10 m) — MNDWI (Verde−SWIR1, Xu 2006), mediana 2021–2024, Cloud Score+",
+        "source": "Sentinel-2 L2A (10–20 m) — MNDWI (Verde−SWIR1, Xu 2006), mediana estación seca may–sep 2022–2024, <20 % nubes, SCL",
         "title": "Índice de Agua Modificado (MNDWI)",
         "legend": "MNDWI (−1 a +1)",
     },
     "ndti": {
         "vmin": 0, "vmax": 80,
         "palette": ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#cc4c02"],
-        "source": "Sentinel-2 L2A (10 m) — Turbidez FNU Nechad/Dogliotti · Cloud Score+ · agua (MNDWI/JRC)",
+        "source": "Sentinel-2 L2A (10 m) — Turbidez FNU Nechad/Dogliotti, mediana estación seca 2022–2024, solo agua (MNDWI>0 ∪ JRC>30 %)",
         "title": "Turbidez del Agua (FNU) — Nechad/Dogliotti",
         "legend": "Turbidez (FNU ≈ NTU)",
     },
@@ -472,9 +504,10 @@ LAYER_META = {
 _LARGE_WINDOW_KM = 60.0
 
 
-def _layer_image(map_type, region, radius_km=15.0):
+def _layer_image(map_type, region, radius_km=15.0, light=False):
     """Devuelve la ee.Image de banda única para la capa indicada, eligiendo
-    la fuente según la escala de la ventana (S2+Landsat vs MODIS)."""
+    la fuente según la escala de la ventana (Sentinel-2 vs MODIS).
+    `light=True` usa el composite barato (mosaico) para reintentar índices."""
     large = radius_km > _LARGE_WINDOW_KM
 
     if map_type == "dem":
@@ -487,17 +520,17 @@ def _layer_image(map_type, region, radius_km=15.0):
     if map_type == "ndvi":
         if large:
             return _modis_index(region, "ndvi")
-        return _s2_index(region, "ndvi")
+        return _s2_index(region, "ndvi", light=light)
 
     if map_type == "ndwi":
         if large:
             return _modis_index(region, "ndwi")
-        return _s2_index(region, "ndwi")
+        return _s2_index(region, "ndwi", light=light)
 
     if map_type == "ndti":
         if large:
             return _modis_index(region, "ndti")
-        return _s2_turbidity(region)
+        return _s2_turbidity(region, light=light)
 
     if map_type == "manning":
         lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(region)
@@ -896,53 +929,154 @@ def fetch_watershed_data(lat, lon, radius_km=15.0):
 _DYNAMIC_STRETCH = {"dem", "slope", "ndvi", "ndwi", "ndti"}
 
 
+# Índices espectrales: se reintentan con el composite barato (mosaico) si la
+# mediana excede el tiempo/memoria de GEE.
+_INDEX_LAYERS = {"ndvi", "ndwi", "ndti"}
+# Capas que por diseño solo tienen datos sobre agua (no se exige cobertura).
+_SPARSE_LAYERS = {"ndti", "jrc"}
+
+# Último error por capa (para que la app lo muestre en vez de ocultarlo) y modo
+# con el que se obtuvo la última imagen real ("mediana" / "mosaico").
+_LAST_ERRORS = {}
+_LAST_MODE = {}
+
+
+def last_layer_errors():
+    """Errores de GEE de la última generación de cada capa (map_type → dict)."""
+    return dict(_LAST_ERRORS)
+
+
+def last_layer_modes():
+    """Modo de composite usado en la última imagen real de cada capa."""
+    return dict(_LAST_MODE)
+
+
+def _render_thumb(img, map_type, region, meta, dimensions):
+    """Renderiza una ee.Image a array RGBA vía getThumbURL. Lanza excepción con
+    el mensaje REAL del servidor de GEE si la petición falla."""
+    import requests
+    from matplotlib import image as mpimg
+
+    vmin, vmax = meta["vmin"], meta["vmax"]
+    if map_type in _DYNAMIC_STRETCH:
+        try:
+            stats = img.reduceRegion(
+                reducer=ee.Reducer.percentile([2, 98]),
+                geometry=region,
+                scale=300 if map_type in _INDEX_LAYERS else 150,
+                maxPixels=1e9, bestEffort=True,
+            ).getInfo() or {}
+            vals = [v for v in stats.values() if v is not None]
+            if len(vals) >= 2:
+                lo, hi = min(vals), max(vals)
+                if hi - lo > 1e-6:
+                    vmin, vmax = float(lo), float(hi)
+        except Exception as se:
+            print(f"dynamic stretch failed for '{map_type}': {se}")
+
+    vis = img.visualize(min=vmin, max=vmax, palette=meta["palette"])
+    url = vis.getThumbURL({"region": region, "dimensions": dimensions,
+                           "format": "png"})
+    resp = requests.get(url, timeout=120)
+    if resp.status_code != 200:
+        raise RuntimeError(f"HTTP {resp.status_code} de GEE: {resp.text[:300]}")
+    arr = mpimg.imread(io.BytesIO(resp.content))
+    # Imagen vacía (composite sin escenas o todo enmascarado) = fallo, salvo
+    # en capas que solo existen sobre agua.
+    if (map_type not in _SPARSE_LAYERS and arr.ndim == 3
+            and arr.shape[2] == 4 and float((arr[..., 3] > 0).mean()) < 0.02):
+        raise RuntimeError("GEE devolvió una imagen vacía (sin escenas válidas "
+                           "o todo enmascarado por nubes)")
+    return arr, vmin, vmax
+
+
 def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
     """
     Obtiene la imagen renderizada real desde GEE (getThumbURL).
 
     Retorna (arr, vmin, vmax): array numpy RGB(A) float [0..1] y el rango de
-    valores realmente usado para la paleta (dinámico para dem/slope, fijo para
-    el resto). Devuelve None si GEE no está disponible o falla la petición.
+    valores usado para la paleta. Devuelve None si GEE no está disponible o
+    todos los intentos fallan; en ese caso el error real queda en
+    last_layer_errors()[map_type] para mostrarlo (nunca se oculta).
+
+    Índices (NDVI, MNDWI, turbidez): 1er intento mediana de estación seca; si
+    falla, 2do intento con mosaico (mucho más barato).
     """
     if not _GEE_READY:
+        _LAST_ERRORS[map_type] = {"error": "GEE no inicializado", "mode": None}
         return None
-    try:
-        import requests
-        from matplotlib import image as mpimg
+    region = _build_region(lat, lon, radius_km)
+    meta = LAYER_META[map_type]
+    modes = [False, True] if map_type in _INDEX_LAYERS else [False]
+    errors = []
+    for light in modes:
+        mode = "mosaico" if light else "mediana"
+        try:
+            img = _layer_image(map_type, region, radius_km=radius_km, light=light)
+            out = _render_thumb(img, map_type, region, meta, dimensions)
+            _LAST_ERRORS.pop(map_type, None)
+            _LAST_MODE[map_type] = mode
+            return out
+        except Exception as e:
+            msg = f"[{mode}] {e}"
+            errors.append(msg)
+            print(f"GEE thumbnail fetch failed for '{map_type}': {msg}")
+    _LAST_ERRORS[map_type] = {"error": " | ".join(errors)[:600], "mode": None}
+    _LAST_MODE.pop(map_type, None)
+    return None
 
-        region = _build_region(lat, lon, radius_km)
-        meta = LAYER_META[map_type]
-        img = _layer_image(map_type, region, radius_km=radius_km)
 
-        vmin, vmax = meta["vmin"], meta["vmax"]
-        if map_type in _DYNAMIC_STRETCH:
-            try:
-                stats = img.reduceRegion(
-                    reducer=ee.Reducer.percentile([2, 98]),
-                    geometry=region, scale=150,
-                    maxPixels=1e9, bestEffort=True,
-                ).getInfo() or {}
-                vals = [v for v in stats.values() if v is not None]
-                if len(vals) >= 2:
-                    lo, hi = min(vals), max(vals)
-                    if hi - lo > 1e-6:
-                        vmin, vmax = float(lo), float(hi)
-            except Exception as se:
-                print(f"dynamic stretch failed for '{map_type}': {se}")
-
-        vis = img.visualize(min=vmin, max=vmax, palette=meta["palette"])
-        url = vis.getThumbURL({
-            "region": region,
-            "dimensions": dimensions,
-            "format": "png",
-        })
-        resp = requests.get(url, timeout=120)
-        resp.raise_for_status()
-        arr = mpimg.imread(io.BytesIO(resp.content))
-        return arr, vmin, vmax
-    except Exception as e:
-        print(f"GEE thumbnail fetch failed for '{map_type}': {e}")
-        return None
+def debug_layer(map_type, lat, lon, radius_km=15.0):
+    """
+    Diagnóstico de una capa en vivo: nº de escenas Sentinel-2, estadísticas
+    (mín/máx/nº de píxeles válidos) y resultado del thumbnail por cada modo.
+    Permite ver el error EXACTO de GEE y comprobar que NDVI, MNDWI y turbidez
+    dan valores distintos (no el mismo patrón).
+    """
+    import time
+    import requests
+    out = {"layer": map_type, "lat": lat, "lon": lon, "radius_km": radius_km,
+           "gee_ready": _GEE_READY, "steps": []}
+    if not _GEE_READY:
+        out["error"] = "GEE no inicializado"
+        return out
+    if map_type not in LAYER_META:
+        out["error"] = f"capa desconocida: {map_type}"
+        return out
+    region = _build_region(lat, lon, radius_km)
+    if map_type in _INDEX_LAYERS and radius_km <= _LARGE_WINDOW_KM:
+        try:
+            out["s2_escenas_mediana"] = _s2_scene_count(region).getInfo()
+        except Exception as e:
+            out["s2_escenas_error"] = str(e)[:300]
+    meta = LAYER_META[map_type]
+    for light in ([False, True] if map_type in _INDEX_LAYERS else [False]):
+        step = {"modo": "mosaico" if light else "mediana"}
+        t0 = time.time()
+        try:
+            img = _layer_image(map_type, region, radius_km=radius_km, light=light)
+            red = (ee.Reducer.minMax()
+                   .combine(ee.Reducer.mean(), sharedInputs=True)
+                   .combine(ee.Reducer.count(), sharedInputs=True))
+            step["estadisticas"] = img.reduceRegion(
+                reducer=red, geometry=region, scale=300,
+                maxPixels=1e9, bestEffort=True).getInfo()
+            step["t_estadisticas_s"] = round(time.time() - t0, 1)
+            vis = img.visualize(min=meta["vmin"], max=meta["vmax"],
+                                palette=meta["palette"])
+            url = vis.getThumbURL({"region": region, "dimensions": 512,
+                                   "format": "png"})
+            r = requests.get(url, timeout=120)
+            step["http"] = r.status_code
+            if r.status_code == 200:
+                step["ok"] = True
+            else:
+                step["error"] = r.text[:500]
+        except Exception as e:
+            step["error"] = str(e)[:500]
+        step["t_total_s"] = round(time.time() - t0, 1)
+        out["steps"].append(step)
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════

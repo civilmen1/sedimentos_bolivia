@@ -194,11 +194,15 @@ body {
   </button>
   {% if maps_source == 'real' %}
   <span style="margin-left:auto; font-size:.78rem; color:#34d399; font-weight:600;">
-    🛰 Datos satelitales reales — Google Earth Engine
+    🛰 Datos satelitales reales — Google Earth Engine (todos los mapas)
+  </span>
+  {% elif maps_source == 'mixed' %}
+  <span style="margin-left:auto; font-size:.78rem; color:#f87171; font-weight:700;">
+    ⚠ Algunos mapas NO se calcularon en GEE y son SINTÉTICOS (marcados en rojo) — no usar
   </span>
   {% else %}
-  <span style="margin-left:auto; font-size:.78rem; color:#fbbf24; font-weight:600;">
-    ⚠ Datos de demostración — configure la cuenta de servicio GEE para datos reales
+  <span style="margin-left:auto; font-size:.78rem; color:#f87171; font-weight:700;">
+    ⚠ Todos los mapas son SINTÉTICOS de demostración — no usar
   </span>
   {% endif %}
 </div>
@@ -213,7 +217,8 @@ body {
       <span class="map-num">{{ loop.index }}</span>
       <span class="map-card-title">{{ map_titles[mt] }}</span>
     </div>
-    <div class="map-source">
+    <div class="map-source"{% if map_real is defined and not map_real.get(mt, true) %} style="background:#7f1d1d;color:#fecaca;"{% endif %}>
+      {% if map_real is defined and not map_real.get(mt, true) %}<strong>⚠ DATOS SINTÉTICOS — no representan la cuenca.</strong><br>{% endif %}
       <strong>Fuente:</strong> {{ map_sources[mt] }}
     </div>
     <div class="map-img-wrap">
@@ -234,7 +239,10 @@ body {
 <!-- ═══ DOWNLOAD HINT ═══ -->
 <div class="dl-section">
   <div>
-    {% if maps_source == 'real' %}
+    {% if maps_source == 'mixed' %}
+    <p>⚠ <strong>Atención:</strong> los mapas marcados en rojo no pudieron calcularse en Google Earth Engine y muestran datos sintéticos de demostración. El detalle del error por capa está en <code>/gee_status</code> y se puede diagnosticar con <code>/gee_debug?layer=ndvi&amp;lat={{ lat }}&amp;lon={{ lon }}</code>.</p>
+    {% endif %}
+    {% if maps_source in ('real', 'mixed') %}
     <p>🛰 <strong>Datos reales:</strong> La cuenca se delimitó con el DEM Copernicus GLO-30 (remuestreo bicúbico a 12.5 m) y geoproceso pyflwdir; los mapas temáticos provienen de Google Earth Engine (Sentinel-2, SRTM, ESA WorldCover, JRC), recortados a la cuenca, con marco cartográfico completo (proyección UTM WGS84, norte, escala, leyenda).</p>
     {% else %}
     <p>⚠ <strong>Modo demostración:</strong> Los mapas muestran datos sintéticos. Para obtener imágenes satelitales reales, configure la clave JSON de la cuenta de servicio de Google Earth Engine como variable de entorno <code>EE_SERVICE_ACCOUNT_JSON</code> del servidor.</p>

@@ -47,7 +47,10 @@ from utils.gee_handler import (
     get_landcover_at_point,
     get_ndti_turbidity,
     get_channel_width,
-    compute_rusle_point
+    compute_rusle_point,
+    last_layer_errors,
+    last_layer_modes,
+    debug_layer
 )
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
@@ -57,7 +60,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v40-turbidez-fnu-nechad"
+APP_VERSION = "v41-indices-reales-diagnostico"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -1666,8 +1669,8 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         if data_array is None:
             data_array = _synthetic_data(map_type, lat=lat, lon=lon)
         cmap  = MAP_CMAPS.get(map_type, 'viridis')
-        title = MAP_TITLES.get(map_type, map_type.upper())
-        src   = MAP_SOURCES.get(map_type, "—") + "  (datos sintéticos de demostración)"
+        title = MAP_TITLES.get(map_type, map_type.upper()) + " — DATOS SINTÉTICOS"
+        src   = "DATOS SINTÉTICOS DE DEMOSTRACIÓN (GEE no devolvió esta capa)"
         lbl   = MAP_LEGEND_LABELS.get(map_type, "Valor")
 
     # ── Figure layout ────────────────────────────────────────────────────
@@ -1689,6 +1692,11 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
         im = ax_map.imshow(data_array, cmap=cmap,
                            extent=[lon_min, lon_max, lat_min, lat_max],
                            origin='upper', aspect='auto', zorder=1)
+        # Marca de agua: un mapa sintético NUNCA debe confundirse con uno real.
+        ax_map.text(0.5, 0.5, "DATOS SINTÉTICOS\nNO REPRESENTAN LA CUENCA",
+                    transform=ax_map.transAxes, ha='center', va='center',
+                    fontsize=26, fontweight='bold', color='#c0392b',
+                    alpha=0.30, rotation=28, zorder=20)
 
     # ── Watershed overlay (delimita la cuenca + red de drenaje) ──────────
     _has_watershed = watershed_data is not None
@@ -1948,26 +1956,73 @@ def generate_thematic_map(lat, lon, map_type, radius_km=15.0, use_cache=True,
 
     key = _cache_key(lat, lon, map_type, radius_km)
     if use_cache and key in _MAP_CACHE:
+        # En caché solo se guardan mapas REALES (ver abajo).
+        _MAP_STATUS[map_type] = {"real": True, "error": None}
         return _MAP_CACHE[key]
 
-    rgb, vrange = None, None
+    rgb, vrange, err = None, None, None
     if gee_ready():
         thumb = fetch_gee_thumbnail(map_type, lat, lon, radius_km=radius_km)
         if thumb is not None:
             rgb, vmin_d, vmax_d = thumb
             vrange = (vmin_d, vmax_d)
+        else:
+            err = ((last_layer_errors().get(map_type) or {}).get("error")
+                   or "GEE no devolvió la capa")
+    else:
+        err = "Google Earth Engine no disponible"
 
     png = generate_cartographic_map(lat, lon, map_type,
                                     radius_km=radius_km, rgb_image=rgb,
                                     watershed_data=watershed_data,
                                     point_lat=pt_lat, point_lon=pt_lon,
                                     vrange=vrange)
+    real = rgb is not None
+    _MAP_STATUS[map_type] = {"real": real, "error": err}
 
-    if use_cache:
+    # Nunca cachear un sintético: así el próximo pedido vuelve a intentar GEE
+    # en vez de servir para siempre un mapa de demostración.
+    if use_cache and real:
         if len(_MAP_CACHE) >= _MAP_CACHE_MAX:
             _MAP_CACHE.pop(next(iter(_MAP_CACHE)))
         _MAP_CACHE[key] = png
     return png
+
+
+# Estado de la última generación de cada mapa temático: {"real": bool, "error": str}
+_MAP_STATUS = {}
+
+
+def maps_truth(map_titles=None):
+    """
+    Estado VERAZ de los mapas recién generados, para los informes y la galería:
+      map_real    : {map_type: True/False}
+      map_sources : fuente declarada si el mapa es real; si es sintético, lo
+                    dice explícitamente junto con el error de GEE
+      maps_source : "real" (todos), "mixed" (algunos) o "synthetic" (ninguno)
+    Reemplaza al antiguo `"real" if gee_ready()`, que etiquetaba como Sentinel-2
+    mapas que en realidad eran de demostración.
+    """
+    titles = map_titles or MAP_TITLES
+    map_real, map_sources, map_errors = {}, {}, {}
+    for mt in titles:
+        st = _MAP_STATUS.get(mt, {"real": False, "error": "no generado"})
+        real, err = bool(st.get("real")), st.get("error")
+        map_real[mt] = real
+        map_errors[mt] = err
+        src = LAYER_META.get(mt, {}).get("source", "—")
+        if real:
+            mode = last_layer_modes().get(mt)
+            map_sources[mt] = src + (" (composite: mosaico)" if mode == "mosaico" else "")
+        else:
+            map_sources[mt] = ("DATOS SINTÉTICOS DE DEMOSTRACIÓN — no representan la "
+                               "cuenca. GEE no devolvió esta capa"
+                               + (f": {err}" if err else "."))
+    n_real = sum(1 for v in map_real.values() if v)
+    maps_source = ("real" if n_real == len(map_real)
+                   else "mixed" if n_real else "synthetic")
+    return {"map_real": map_real, "map_sources": map_sources,
+            "map_errors": map_errors, "maps_source": maps_source}
 
 
 def generate_all_thematic_maps(lat, lon, radius_km=15.0):
@@ -1981,6 +2036,10 @@ def generate_all_thematic_maps(lat, lon, radius_km=15.0):
     clat, clon, R = _basin_frame(lat, lon, wd, fallback_R)
     maps = {"watershed": generate_watershed_map(
         clat, clon, R, watershed_data=wd, point_lat=lat, point_lon=lon)}
+    ws_real = bool(wd and wd.get("is_real"))
+    _MAP_STATUS["watershed"] = {
+        "real": ws_real,
+        "error": None if ws_real else "cuenca sintética (no se pudo delimitar con el DEM de GEE)"}
     for mt in list(MAP_TITLES.keys()):
         if mt != "watershed":
             maps[mt] = generate_thematic_map(
@@ -2840,15 +2899,23 @@ def report():
             results["scour"] = None
 
         results["charts"] = generate_charts(results)
+        if request.args.get("refresh", "0") in ("1", "true", "yes"):
+            _MAP_CACHE.clear()
+            _WATERSHED_CACHE.clear()
+            _MANNING_CACHE.clear()
+        results["map_titles"] = MAP_TITLES
         try:
             results["maps"] = generate_all_thematic_maps(lat, lon)
-            results["maps_source"] = "real" if gee_ready() else "synthetic"
+            truth = maps_truth()
+            results["maps_source"] = truth["maps_source"]
+            results["map_real"] = truth["map_real"]
+            results["map_sources"] = truth["map_sources"]
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
             results["maps_source"] = "none"
-        results["map_titles"] = MAP_TITLES
-        results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
+            results["map_real"] = {}
+            results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
         return render_template("report.html", results=results)
     except Exception as e:
         return str(e), 400
@@ -2979,15 +3046,23 @@ def report_pdf():
             results["scour"] = None
 
         results["charts"] = generate_charts(results)
+        if request.args.get("refresh", "0") in ("1", "true", "yes"):
+            _MAP_CACHE.clear()
+            _WATERSHED_CACHE.clear()
+            _MANNING_CACHE.clear()
+        results["map_titles"] = MAP_TITLES
         try:
             results["maps"] = generate_all_thematic_maps(lat, lon)
-            results["maps_source"] = "real" if gee_ready() else "synthetic"
+            truth = maps_truth()
+            results["maps_source"] = truth["maps_source"]
+            results["map_real"] = truth["map_real"]
+            results["map_sources"] = truth["map_sources"]
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
             results["maps_source"] = "none"
-        results["map_titles"] = MAP_TITLES
-        results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
+            results["map_real"] = {}
+            results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
 
         html_str = render_template("report_pdf.html", results=results)
         from weasyprint import HTML
@@ -3051,17 +3126,18 @@ def maps_view():
             _WATERSHED_CACHE.clear()
             _MANNING_CACHE.clear()
         maps = generate_all_thematic_maps(lat, lon)
-        map_sources = {k: v.get("source", "—") for k, v in LAYER_META.items()}
+        truth = maps_truth()
         return render_template(
             "maps.html",
             lat=lat, lon=lon, d50=d50, d90=d90,
             maps=maps,
             map_titles=MAP_TITLES,
-            map_sources=map_sources,
+            map_sources=truth["map_sources"],
+            map_real=truth["map_real"],
             author=MAP_AUTHOR,
             creator=MAP_CREATOR,
             date=datetime.now().strftime("%d/%m/%Y"),
-            maps_source=("real" if gee_ready() else "synthetic"),
+            maps_source=truth["maps_source"],
             app_version=APP_VERSION,
         )
     except Exception as e:
@@ -3104,7 +3180,13 @@ def gee_status_route():
     probe = request.args.get("probe", "0") in ("1", "true", "yes")
     st = gee_status(probe=probe)
     st["app_version"] = APP_VERSION
-    st["data_mode"] = "real" if st["ready"] else "synthetic"
+    # "real" solo si GEE está listo Y ninguna capa falló en la última generación.
+    if not st["ready"]:
+        st["data_mode"] = "synthetic"
+    elif st.get("last_layer_errors"):
+        st["data_mode"] = "mixed"
+    else:
+        st["data_mode"] = "real"
     if not st["ready"]:
         st["how_to_fix"] = (
             "Configura el secreto EE_SERVICE_ACCOUNT_JSON en el Space "
@@ -3112,6 +3194,26 @@ def gee_status_route():
             ".json de una cuenta de servicio de Google Cloud habilitada para "
             "Earth Engine. Ver GEE_SETUP.md.")
     return jsonify(st)
+
+
+@app.route("/gee_debug")
+def gee_debug_route():
+    """
+    Diagnóstico en vivo de una capa de GEE — muestra el error EXACTO y las
+    estadísticas reales (mín/máx/media/nº píxeles) de cada composite:
+        /gee_debug?layer=ndvi&lat=-16.44&lon=-68.05&radius=20
+    layer ∈ dem, slope, ndvi, ndwi (MNDWI), ndti (turbidez FNU), manning, risk, jrc
+    """
+    try:
+        layer = request.args.get("layer", "ndvi")
+        lat = float(request.args.get("lat", -16.5))
+        lon = float(request.args.get("lon", -68.15))
+        radius = float(request.args.get("radius", 20))
+        out = debug_layer(layer, lat, lon, radius)
+        out["app_version"] = APP_VERSION
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e), "app_version": APP_VERSION}), 500
 
 
 @app.route("/watershed_status")
