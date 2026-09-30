@@ -1,0 +1,67 @@
+{# Capítulo de aseguramiento de la calidad — ISO 9001:2015 · ISO/IEC 25010 · ISO/IEC 25012 #}
+{% if results.iso %}
+<h1>11. Aseguramiento de la Calidad</h1>
+<p>Este capítulo registra los criterios de aceptación, la verificación y validación, la calidad de los datos
+(ISO/IEC 25012) y del software (ISO/IEC 25010), las salidas no conformes y el dictamen de liberación del
+informe (ISO 9001:2015 §8.3.4, §8.3.5, §8.6 y §8.7). Los criterios se evalúan automáticamente con los datos
+de esta corrida (ID <span class="mono">{{ results.doc.run_id }}</span>).</p>
+
+<h2>11.1 Criterios de aceptación (ISO 9001 §8.3.5)</h2>
+<table style="width:100%; font-size:8.5pt;">
+  <thead><tr><th>Criterio</th><th>Descripción</th><th>Resultado</th></tr></thead>
+  <tbody>
+  {% for c in results.iso.criterios %}
+    <tr><td>{{ c.id }}</td><td>{{ c.desc }}</td>
+      <td style="font-weight:700; color:{{ '#1a7f37' if c.cumple else '#c0392b' }};">{{ 'Cumple' if c.cumple else 'No cumple' }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>11.2 Verificación y validación (ISO 9001 §8.3.4)</h2>
+<p class="no-indent" style="text-indent:0;"><strong>Verificación</strong> (¿se calculó correctamente?):</p>
+<ul>{% for v in results.iso.vv.verificacion %}<li>{{ v }}</li>{% endfor %}</ul>
+<p class="no-indent" style="text-indent:0;"><strong>Validación</strong> (¿representa la realidad de la cuenca?):</p>
+<ul>{% for v in results.iso.vv.validacion %}<li>{{ v }}</li>{% endfor %}</ul>
+
+<h2>11.3 Calidad de los datos (ISO/IEC 25012)</h2>
+<p>Características inherentes evaluadas por fuente: exactitud, completitud, credibilidad y actualidad;
+dependientes del sistema: precisión (resolución) y trazabilidad (identificador de colección).</p>
+<table style="width:100%; font-size:7.5pt;">
+  <thead><tr><th>Dato</th><th>Fuente / colección (trazabilidad)</th><th>Precisión</th><th>Actualidad</th><th>Credibilidad</th><th>Exactitud</th><th>Completitud</th><th>Estado</th></tr></thead>
+  <tbody>
+  {% for d in results.iso.datos %}
+    <tr><td>{{ d.dato }}</td><td>{{ d.fuente }}<br><span class="mono" style="font-size:6.5pt;">{{ d.coleccion }}</span></td>
+      <td>{{ d.resolucion }}</td><td>{{ d.actualidad }}</td><td>{{ d.credibilidad }}</td><td>{{ d.exactitud }}</td><td>{{ d.completitud }}</td>
+      <td style="font-weight:700; color:{{ '#1a7f37' if d.semaforo == 'Cumple' else ('#b7791f' if d.semaforo == 'Parcial' else '#c0392b') }};">{{ d.semaforo }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>11.4 Calidad del software (ISO/IEC 25010:2023)</h2>
+<table style="width:100%; font-size:8pt;">
+  <thead><tr><th>Característica</th><th>Evidencia</th></tr></thead>
+  <tbody>
+  {% for car, ev in results.iso.software %}<tr><td>{{ car }}</td><td>{{ ev }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+
+<h2>11.5 Salidas no conformes, limitaciones y supuestos (ISO 9001 §8.7)</h2>
+<table style="width:100%; font-size:8pt;">
+  <thead><tr><th>ID</th><th>No conformidad</th><th>Causa</th><th>Acción tomada</th></tr></thead>
+  <tbody>
+  {% for n in results.iso.no_conformes %}
+    <tr><td>{{ n.id }}</td><td>{{ n.desc }}</td><td>{{ n.causa }}</td><td>{{ n.accion }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>11.6 Acta de liberación (ISO 9001 §8.6)</h2>
+<p><strong style="color:{{ '#1a7f37' if results.iso.liberable else '#c0392b' }};">{{ results.iso.dictamen }}</strong></p>
+<table style="width:100%; font-size:8.5pt;">
+  <tbody>
+    <tr><th style="text-align:left; width:30%;">Documento</th><td class="mono">{{ results.doc.codigo }} · {{ results.doc.revision }}</td></tr>
+    <tr><th style="text-align:left;">Liberado por (nombre y firma)</th><td>&nbsp;</td></tr>
+    <tr><th style="text-align:left;">Fecha de liberación</th><td>&nbsp;</td></tr>
+  </tbody>
+</table>
+{% endif %}

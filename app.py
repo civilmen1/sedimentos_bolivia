@@ -50,7 +50,11 @@ from utils.gee_handler import (
     compute_rusle_point,
     last_layer_errors,
     last_layer_modes,
-    debug_layer
+    debug_layer,
+    last_classified,
+    compute_class_areas,
+    fetch_ndvi_multiyear,
+    CLASS_SCHEMES
 )
 from matplotlib.colors import LinearSegmentedColormap, Normalize
 from matplotlib.cm import ScalarMappable
@@ -60,7 +64,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v41-indices-reales-diagnostico"
+APP_VERSION = "v42-clases-iso9001"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -1748,7 +1752,22 @@ def generate_cartographic_map(lat, lon, map_type, radius_km=15.0,
     # Sin barra solo cuando el fondo es satelital RGB (S2, sin escala de valor);
     # con fondo de DEM real (vrange) sí hay barra de elevación.
     show_cb = not (map_type == "watershed" and is_real and vrange is None)
-    if show_cb:
+    classified = is_real and map_type in last_classified() \
+        and map_type in CLASS_SCHEMES
+    if show_cb and classified:
+        # Mapa de CLASES: leyenda discreta con los rangos escritos.
+        from matplotlib.colors import ListedColormap, BoundaryNorm
+        sch = CLASS_SCHEMES[map_type]
+        n_cls = len(sch["colors"])
+        sm = ScalarMappable(norm=BoundaryNorm(list(range(n_cls + 1)), n_cls),
+                            cmap=ListedColormap(sch["colors"]))
+        sm.set_array([])
+        cb = fig.colorbar(sm, cax=ax_cb, ticks=[i + 0.5 for i in range(n_cls)])
+        cb.ax.set_yticklabels([l.replace(" (", "\n(") for l in sch["labels"]],
+                              fontsize=6)
+        # Sin rótulo vertical: las etiquetas de clase ya lo explican y el
+        # rótulo se superpondría con el panel de información.
+    elif show_cb:
         if is_real:
             _vmin = vrange[0] if vrange else meta['vmin']
             _vmax = vrange[1] if vrange else meta['vmax']
@@ -2013,7 +2032,10 @@ def maps_truth(map_titles=None):
         src = LAYER_META.get(mt, {}).get("source", "—")
         if real:
             mode = last_layer_modes().get(mt)
-            map_sources[mt] = src + (" (composite: mosaico)" if mode == "mosaico" else "")
+            map_sources[mt] = src + {
+                "scl": " — [respaldo: máscara SCL, Cloud Score+ no disponible]",
+                "mosaico": " — [respaldo: MOSAICO de escenas, sin control de confianza]",
+            }.get(mode, "")
         else:
             map_sources[mt] = ("DATOS SINTÉTICOS DE DEMOSTRACIÓN — no representan la "
                                "cuenca. GEE no devolvió esta capa"
@@ -2045,7 +2067,261 @@ def generate_all_thematic_maps(lat, lon, radius_km=15.0):
             maps[mt] = generate_thematic_map(
                 clat, clon, mt, radius_km=R, watershed_data=wd,
                 point_lat=lat, point_lon=lon)
+
+    # Hectáreas por clase (dentro de la cuenca) y serie multitemporal NDVI.
+    _MAP_AREAS.clear()
+    _MULTI.clear()
+    boundary = (wd or {}).get("boundary") if ws_real else None
+    for mt in CLASS_SCHEMES:
+        if _MAP_STATUS.get(mt, {}).get("real"):
+            areas = compute_class_areas(mt, clat, clon, R, boundary)
+            if areas:
+                _MAP_AREAS[mt] = areas
+    if gee_ready():
+        try:
+            years = fetch_ndvi_multiyear(clat, clon, R)
+            if years:
+                _MULTI["ndvi"] = _ndvi_multiyear_panel(years, clat, clon, R, wd)
+        except Exception as e:
+            print(f"Panel multitemporal NDVI falló: {e}")
     return maps
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ASEGURAMIENTO DE LA CALIDAD — ISO 9001:2015 · ISO/IEC 25010:2023 · 25012:2008
+# (el informe se ESTRUCTURA conforme a estas normas; la certificación ISO
+#  corresponde al sistema de gestión de la organización, no a un informe)
+# ════════════════════════════════════════════════════════════════════════════
+_DATA_SOURCES = {
+    # map_type: (dato, fuente, id de colección GEE, resolución, periodo, institución, exactitud)
+    "watershed": ("Cuenca y red de drenaje", "Copernicus DEM GLO-30 / MERIT Hydro + pyflwdir (D8)",
+                  "COPERNICUS/DEM/GLO30 · MERIT/Hydro/v1_0_1", "12.5–90 m", "DEM 2011–2015",
+                  "ESA/Copernicus; Univ. Tokio", "Delimitación automática D8; verificar con cartografía IGM"),
+    "dem": ("Modelo digital de elevación", "SRTM v3", "USGS/SRTMGL1_003", "30 m", "2000",
+            "NASA/USGS", "Error vertical absoluto ≤ 16 m (especificación SRTM)"),
+    "slope": ("Pendiente del terreno", "SRTM v3 + ee.Terrain.slope", "USGS/SRTMGL1_003", "30 m",
+              "2000", "NASA/USGS", "Derivada del DEM; hereda su error vertical"),
+    "ndvi": ("NDVI (vegetación)", "Sentinel-2 L2A + Cloud Score+",
+             "COPERNICUS/S2_SR_HARMONIZED · GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED",
+             "10 m", "may–sep 2022–2024", "ESA/Copernicus; Google",
+             "Reflectancia de superficie L2A (Sen2Cor); cortes de clase citados"),
+    "ndwi": ("MNDWI (agua)", "Sentinel-2 L2A + Cloud Score+",
+             "COPERNICUS/S2_SR_HARMONIZED · GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED",
+             "10–20 m", "may–sep 2022–2024", "ESA/Copernicus; Google",
+             "Umbral agua > 0 (Xu 2006); cauces < ~20 m quedan sub-píxel"),
+    "ndti": ("Turbidez del agua (FNU)", "Sentinel-2 L2A — Nechad/Dogliotti",
+             "COPERNICUS/S2_SR_HARMONIZED", "10 m", "may–sep 2022–2024",
+             "ESA/Copernicus", "Coeficientes genéricos; SIN validación de campo en esta cuenca"),
+    "manning": ("n de Manning", "ESA WorldCover (reclasificado)", "ESA/WorldCover/v100", "10 m",
+                "2020", "ESA", "Exactitud temática global WorldCover ≈ 74 %; n por tabla"),
+    "risk": ("Índice de riesgo", "JRC GSW + SRTM (índice compuesto)",
+             "JRC/GSW1_4/GlobalSurfaceWater", "30 m", "1984–2021", "JRC/Comisión Europea",
+             "Índice relativo (ponderación 0.6/0.4), no probabilístico"),
+    "jrc": ("Frecuencia de inundación", "JRC Global Surface Water 1.4",
+            "JRC/GSW1_4/GlobalSurfaceWater", "30 m", "1984–2021", "JRC/Comisión Europea",
+            "Serie Landsat; subestima cauces angostos"),
+}
+
+
+def _count_tests():
+    """Nº de casos de prueba automatizados definidos en tests/ (pytest)."""
+    import glob
+    n = 0
+    for f in glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "tests", "test_*.py")):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                n += sum(1 for ln in fh if ln.lstrip().startswith("def test_"))
+        except OSError:
+            pass
+    return n
+
+
+def build_iso_context(results):
+    """
+    Contexto de control documental y calidad para el informe:
+    doc (código, revisión, ID de corrida), criterios de aceptación evaluados,
+    V&V, calidad de datos por fuente (25012), calidad del software (25010),
+    salidas no conformes (9001 §8.7) y dictamen de liberación (§8.6).
+    """
+    import hashlib, json
+    now = datetime.now()
+    lat, lon = float(results.get("lat", 0)), float(results.get("lon", 0))
+    loc = f"{abs(lat):.3f}{'S' if lat < 0 else 'N'}{abs(lon):.3f}{'W' if lon < 0 else 'E'}"
+    inputs = {k: results.get(k) for k in ("lat", "lon", "d50", "d90", "depth",
+                                          "velocity", "slope", "temp")}
+    run_id = hashlib.sha1((json.dumps(inputs, sort_keys=True, default=str)
+                           + now.isoformat()).encode()).hexdigest()[:10].upper()
+    doc = {
+        "codigo": f"INF-SED-{loc}-{now:%Y%m%d}-{now:%H%M}",
+        "revision": "Rev. 0",
+        "estado": "BORRADOR — pendiente de revisión y aprobación",
+        "fecha": now.strftime("%d/%m/%Y %H:%M"),
+        "run_id": run_id,
+        "app_version": APP_VERSION,
+        "generador": "Calculadora de Transporte de Sedimentos — Bolivia",
+        "creador": MAP_CREATOR,
+        "elaboro": MAP_AUTHOR,
+        "revisiones": [{"rev": "0", "fecha": now.strftime("%d/%m/%Y"),
+                        "desc": "Emisión inicial generada automáticamente",
+                        "autor": MAP_AUTHOR}],
+        "entradas": inputs,
+    }
+
+    map_real = results.get("map_real") or {}
+    modes = last_layer_modes()
+    maps_src = results.get("maps_source", "none")
+
+    # ── Calidad de datos (ISO/IEC 25012) ──
+    data_rows = []
+    for mt, (dato, fuente, col, res, per, inst, exac) in _DATA_SOURCES.items():
+        real = bool(map_real.get(mt))
+        mode = modes.get(mt)
+        if not real:
+            compl, sem = "Mapa SINTÉTICO — no se obtuvo de GEE", "No cumple"
+        elif mt in ("ndvi", "ndwi", "ndti") and mode in ("scl", "mosaico"):
+            compl, sem = f"Real con composite de respaldo ({mode})", "Parcial"
+        elif mt == "ndti":
+            compl, sem = "Real; solo píxeles de agua", "Parcial"
+        else:
+            compl, sem = "Real, cobertura de la cuenca", "Cumple"
+        data_rows.append({"dato": dato, "fuente": fuente, "coleccion": col,
+                          "resolucion": res, "actualidad": per,
+                          "credibilidad": inst, "exactitud": exac,
+                          "completitud": compl, "semaforo": sem})
+    data_rows.append({"dato": "Datos de campo (d₅₀, d₉₀, y, v, S, T)",
+                      "fuente": "Declarados por el usuario", "coleccion": "Formulario",
+                      "resolucion": "Puntual", "actualidad": doc["fecha"],
+                      "credibilidad": "No verificados por el software",
+                      "exactitud": "Depende del método de campo",
+                      "completitud": "Completos" if all(
+                          (inputs.get(k) or 0) > 0 for k in ("d50", "depth", "velocity", "slope"))
+                          else "Incompletos",
+                      "semaforo": "Parcial"})
+
+    # ── Calidad del software (ISO/IEC 25010:2023) ──
+    n_tests = _count_tests()
+    sw_rows = [
+        ("Adecuación funcional", f"{n_tests} casos de prueba automatizados (pytest) en el "
+         "repositorio: transporte, socavación (18 métodos), RUSLE, cuencas."),
+        ("Fiabilidad", "Reintento automático de composites (Cloud Score+ → SCL → mosaico); "
+         "errores de GEE registrados y declarados, nunca ocultados."),
+        ("Mantenibilidad", f"Versión {APP_VERSION}; dependencias fijadas en requirements.txt; "
+         "código versionado en Git."),
+        ("Seguridad de la información", "Credenciales GEE como secreto del servidor, fuera "
+         "del repositorio."),
+        ("Protección (safety)", "Mapas sintéticos marcados con marca de agua; advertencias "
+         "cuando falla una fuente o un método sale de su rango."),
+        ("Capacidad de interacción", "Interfaz web, informe HTML/PDF, diagnóstico /gee_status "
+         "y /gee_debug."),
+    ]
+
+    # ── Criterios de aceptación (ISO 9001 §8.3.5) ──
+    tr = results.get("transport") or {}
+    tvals = [v for v in tr.values() if isinstance(v, (int, float)) and v > 0]
+    idx_modes = [modes.get(m) for m in ("ndvi", "ndwi", "ndti")]
+    criterios = [
+        ("C1", "Todos los mapas temáticos provienen de datos reales (GEE), sin sintéticos",
+         maps_src == "real"),
+        ("C2", "Índices espectrales con control de confianza (≥ 3 observaciones "
+         "despejadas por píxel; sin mosaico de respaldo)",
+         all(m in ("cloudscore", "scl") for m in idx_modes)),
+        ("C3", "Datos de entrada completos (d₅₀, y, v, S > 0)",
+         all((inputs.get(k) or 0) > 0 for k in ("d50", "depth", "velocity", "slope"))),
+        ("C4", "Transporte calculado por los tres modelos (MPM, Engelund-Hansen, Van Rijn)",
+         len(tvals) >= 3),
+        ("C5", "Trazabilidad registrada (código, revisión, versión del software, ID de corrida)",
+         True),
+    ]
+    criterios = [{"id": c, "desc": d, "cumple": bool(ok)} for c, d, ok in criterios]
+
+    # ── Verificación y validación (§8.3.4) ──
+    disp = round(max(tvals) / min(tvals), 2) if len(tvals) >= 2 else None
+    vv = {
+        "verificacion": [
+            f"Pruebas automatizadas del software: {n_tests} casos definidos.",
+            ("Comparación cruzada de modelos de transporte: razón máx/mín = "
+             f"{disp}" if disp else "Comparación cruzada de modelos: sin datos suficientes."),
+            "Cortes de clase y fórmulas de índices trazados a su publicación original.",
+        ],
+        "validacion": [
+            "PENDIENTE: no se ingresaron mediciones de campo de esta cuenca.",
+            "Procedimiento recomendado: emparejar cada escena con muestras HYBAM/SENAMHI "
+            "(±1 día piedemonte, ±3 días llanura), mediana 3×3–5×5 píxeles de agua pura "
+            "(MNDWI > 0.2), regresión log-log turbidez–SST y reporte de R², RMSE y MAPE "
+            "(estación de referencia: Rurrenabaque, río Beni).",
+        ],
+    }
+
+    # ── Salidas no conformes (§8.7) ──
+    nc = []
+    errs = results.get("map_errors") or {}
+    for mt, real in map_real.items():
+        if not real:
+            nc.append({"desc": f"Mapa '{results.get('map_titles', {}).get(mt, mt)}' "
+                               "generado con datos SINTÉTICOS.",
+                       "causa": (errs.get(mt) or "GEE no devolvió la capa")[:220],
+                       "accion": "Marcado con marca de agua; excluido del análisis. "
+                                 "Regenerar con ?refresh=1 y revisar /gee_debug."})
+        elif mt in ("ndvi", "ndwi", "ndti") and modes.get(mt) == "mosaico":
+            nc.append({"desc": f"Mapa '{mt}' obtenido con mosaico de respaldo.",
+                       "causa": "La mediana con control de confianza no se completó en GEE.",
+                       "accion": "Usar con cautela; zonas sin control de nubosidad."})
+    if not results.get("scour"):
+        nc.append({"desc": "Socavación en puentes no evaluada.",
+                   "causa": "No se ingresaron datos del puente (ancho, pilas, estribos, Q).",
+                   "accion": "Completar la sección de socavación en la calculadora."})
+    nc.append({"desc": "Turbidez (FNU) sin validación de campo en la cuenca.",
+               "causa": "Coeficientes genéricos Nechad/Dogliotti.",
+               "accion": "Aplicar el procedimiento de validación (sección de V&V)."})
+    for i, n in enumerate(nc, 1):
+        n["id"] = f"NC-{i:02d}"
+
+    liberable = all(c["cumple"] for c in criterios)
+    return {"doc": doc, "iso": {
+        "datos": data_rows, "software": sw_rows, "criterios": criterios,
+        "vv": vv, "no_conformes": nc, "liberable": liberable,
+        "dictamen": ("LIBERABLE — cumple todos los criterios de aceptación; requiere "
+                     "revisión y aprobación del responsable" if liberable else
+                     "NO LIBERABLE — existen criterios no cumplidos; tratar las salidas "
+                     "no conformes antes de su uso"),
+    }}
+
+
+# Resultados auxiliares de la última generación de mapas.
+_MAP_AREAS = {}   # map_type -> [{"clase","ha","pct"}]
+_MULTI = {}       # "ndvi" -> PNG base64 del panel multitemporal
+
+
+def _ndvi_multiyear_panel(year_arrays, lat, lon, radius_km, wd):
+    """Panel comparativo NDVI por año (mismos cortes y leyenda)."""
+    from matplotlib.patches import Patch
+    deg_lat = radius_km / 111.0
+    deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+    ext = [lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat]
+    yrs = sorted(year_arrays)
+    fig, axes = plt.subplots(1, len(yrs), figsize=(4.2 * len(yrs), 4.8), dpi=120)
+    if len(yrs) == 1:
+        axes = [axes]
+    bnd = (wd or {}).get("boundary") or []
+    for ax, y in zip(axes, yrs):
+        ax.imshow(year_arrays[y], extent=ext, origin="upper", aspect="auto")
+        if len(bnd) > 2:
+            ax.plot([p[0] for p in bnd], [p[1] for p in bnd], color="#c0392b", lw=1.2)
+        ax.set_title(f"Estación seca {y}", fontsize=10, fontweight="bold")
+        ax.set_xticks([]); ax.set_yticks([])
+    sch = CLASS_SCHEMES["ndvi"]
+    fig.legend(handles=[Patch(color=c, label=l) for c, l in zip(sch["colors"], sch["labels"])],
+               loc="lower center", ncol=3, fontsize=7, frameon=False)
+    fig.suptitle("NDVI por clases — análisis multitemporal (Sentinel-2)",
+                 fontsize=11, fontweight="bold")
+    fig.text(0.5, 0.005, f"Creador: {MAP_CREATOR}  |  Autor: {MAP_AUTHOR}  |  "
+             "Cortes fijos idénticos en todos los años", ha="center", fontsize=6.5)
+    fig.subplots_adjust(bottom=0.22, top=0.86, wspace=0.05)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 def generate_gee_code(lat, lon, d50, d90):
@@ -2910,12 +3186,17 @@ def report():
             results["maps_source"] = truth["maps_source"]
             results["map_real"] = truth["map_real"]
             results["map_sources"] = truth["map_sources"]
+            results["map_errors"] = truth["map_errors"]
+            results["class_areas"] = dict(_MAP_AREAS)
+            results["class_refs"] = {k: v["ref"] for k, v in CLASS_SCHEMES.items()}
+            results["ndvi_multi"] = _MULTI.get("ndvi")
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
             results["maps_source"] = "none"
             results["map_real"] = {}
             results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
+        results.update(build_iso_context(results))
         return render_template("report.html", results=results)
     except Exception as e:
         return str(e), 400
@@ -3057,12 +3338,17 @@ def report_pdf():
             results["maps_source"] = truth["maps_source"]
             results["map_real"] = truth["map_real"]
             results["map_sources"] = truth["map_sources"]
+            results["map_errors"] = truth["map_errors"]
+            results["class_areas"] = dict(_MAP_AREAS)
+            results["class_refs"] = {k: v["ref"] for k, v in CLASS_SCHEMES.items()}
+            results["ndvi_multi"] = _MULTI.get("ndvi")
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
             results["maps_source"] = "none"
             results["map_real"] = {}
             results["map_sources"] = {k: v.get("source", "—") for k, v in LAYER_META.items()}
+        results.update(build_iso_context(results))
 
         html_str = render_template("report_pdf.html", results=results)
         from weasyprint import HTML
