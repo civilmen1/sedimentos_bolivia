@@ -398,6 +398,8 @@ table tfoot td {
   <h2>2.2 Parámetros Morfométricos de la Cuenca</h2>
   {% if results.morphometry %}
   {% set m = results.morphometry %}
+  {% if m and m.area_aviso %}<p class="no-indent" style="text-indent:0; color:#c0392b;"><strong>⚠ Control del área:</strong> {{ m.area_aviso }}</p>{% endif %}
+  {% if m and m.area_metodo %}<p class="no-indent" style="text-indent:0; font-size:8.5pt; color:#555;">Área calculada como superficie {{ m.area_metodo|lower }}.</p>{% endif %}
   <p>La cuenca tributaria al sitio de muestreo fue delimitada mediante geoproceso hidrológico sobre el Modelo Digital de Elevación Copernicus GLO-30 remuestreado por interpolación bicúbica a 12.5 m (relleno de depresiones, dirección de flujo D8, acumulación de flujo y cuenca de aporte con la librería <em>pyflwdir</em>). Presenta una superficie de <strong>{{ m.area_km2 }} km²</strong> y un perímetro de <strong>{{ m.perimeter_km }} km</strong>, con una longitud del cauce principal de <strong>{{ m.channel_length_km }} km</strong> y un desnivel total (relieve) de <strong>{{ m.relief_m }} m</strong> (cota {{ m.elev_min_m }}–{{ m.elev_max_m }} m s.n.m.). La pendiente media del cauce principal, calculada del DEM, es S = <strong>{% if m.channel_slope_mm %}{{ m.channel_slope_mm }} m/m ({{ m.channel_slope_pct }}%){% else %}no determinada (cauce muy plano){% endif %}</strong>{% if m.channel_slope_mm %}, valor que encuadra la dinámica de transporte en el régimen {% if m.channel_slope_mm > 0.02 %}de alta energía, característico de ríos de montaña{% elif m.channel_slope_mm > 0.005 %}transicional, con alternancia de tramos empinados y llanos{% else %}de baja energía, propio de llanuras de inundación{% endif %}{% endif %}.</p>
 
   <p class="tbl-caption"><span class="tbl-title">Tabla 1a</span><br>Parámetros morfométricos de la cuenca (DEM Copernicus GLO-30 12.5 m + pyflwdir)</p>
@@ -405,6 +407,7 @@ table tfoot td {
     <thead><tr><th>Parámetro</th><th>Símbolo</th><th>Valor</th><th>Unidad</th></tr></thead>
     <tbody>
       <tr><td>Área de la cuenca</td><td>A</td><td class="td-num">{{ m.area_km2 }}</td><td>km²</td></tr>
+      {% if m.area_raster_km2 %}<tr><td>Área de control (ráster de delineación)</td><td>A<sub>r</sub></td><td class="td-num">{{ m.area_raster_km2 }}</td><td>km² ({{ "%+.1f"|format(m.area_dif_pct) }} %)</td></tr>{% endif %}
       <tr><td>Perímetro</td><td>P</td><td class="td-num">{{ m.perimeter_km }}</td><td>km</td></tr>
       <tr><td>Longitud de la cuenca</td><td>Lb</td><td class="td-num">{{ m.basin_length_km }}</td><td>km</td></tr>
       <tr><td>Longitud del cauce principal</td><td>Lc</td><td class="td-num">{{ m.channel_length_km }}</td><td>km</td></tr>
