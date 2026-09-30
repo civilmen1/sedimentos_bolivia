@@ -64,7 +64,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v42-clases-iso9001"
+APP_VERSION = "v43-escenas-acotadas"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -868,6 +868,67 @@ def _len_lonlat(coords):
     return tot
 
 
+def _geodesic_area_km2(coords):
+    """
+    Área (km²) del polígono (lon, lat) sobre el elipsoide WGS84 — la misma
+    superficie que se dibuja como parteaguas. pyproj.Geod si está disponible;
+    si no, fórmula esférica con radio auténtico (R = 6 371 007 m, error < 0.3 %).
+    """
+    if not coords or len(coords) < 3:
+        return 0.0
+    lons = [float(p[0]) for p in coords]
+    lats = [float(p[1]) for p in coords]
+    try:
+        from pyproj import Geod
+        a, _ = Geod(ellps="WGS84").polygon_area_perimeter(lons, lats)
+        return abs(a) / 1e6
+    except Exception:
+        R = 6371007.0
+        tot = 0.0
+        n = len(lons)
+        for i in range(n):
+            j = (i + 1) % n
+            tot += (math.radians(lons[j] - lons[i])
+                    * (2 + math.sin(math.radians(lats[i]))
+                       + math.sin(math.radians(lats[j]))))
+        return abs(tot) * R * R / 2.0 / 1e6
+
+
+def _reconcile_basin_area(data):
+    """
+    Unifica el área de la cuenca: el área OFICIAL es la del polígono dibujado
+    (geodésica). El valor del ráster (píxeles / área acumulada / UP_AREA) se
+    conserva como control; si difieren > 10 % se registra un aviso y se
+    recalculan los índices de forma con el área oficial.
+    """
+    morph = data.get("morphometry")
+    if not morph or not data.get("boundary"):
+        return data
+    a_poly = _geodesic_area_km2(data["boundary"])
+    if a_poly <= 0:
+        return data
+    a_rast = float(morph.get("area_km2") or 0.0)
+    morph["area_raster_km2"] = round(a_rast, 2) if a_rast else None
+    morph["area_km2"] = round(a_poly, 2)
+    morph["area_metodo"] = "Geodésica del polígono del parteaguas (elipsoide WGS84)"
+    if a_rast > 0:
+        dif = 100.0 * (a_poly - a_rast) / a_rast
+        morph["area_dif_pct"] = round(dif, 1)
+        if abs(dif) > 10.0:
+            morph["area_aviso"] = (
+                f"El área del polígono ({a_poly:,.2f} km²) difiere {dif:+.1f} % del "
+                f"valor del ráster ({a_rast:,.2f} km²): revisar el punto de cierre "
+                "y la delineación.")
+    per = morph.get("perimeter_km")
+    blen = morph.get("basin_length_km")
+    if per:
+        morph["gravelius_kc"] = round(0.2821 * float(per) / math.sqrt(a_poly), 3)
+    if blen:
+        morph["form_factor_rf"] = round(a_poly / float(blen) ** 2, 4)
+        morph["elongation_re"] = round(1.1284 * math.sqrt(a_poly) / float(blen), 3)
+    return data
+
+
 def delineate_watershed_merit(lat, lon, radius_km=40.0):
     """
     Delineación con MERIT Hydro (hidrografía global pre-acondicionada 90 m) vía
@@ -966,7 +1027,7 @@ def delineate_watershed_merit(lat, lon, radius_km=40.0):
 
             # Morfometría (lon/lat → m)
             area_km2 = area_upa if area_upa > 0 else \
-                int(catch_arr.sum()) * (92.77 ** 2) / 1e6
+                int(catch_arr.sum()) * 92.77 * 92.77 * math.cos(math.radians(lat)) / 1e6
             perimeter_km = _len_lonlat(boundary) / 1000.0
             channel_len_km = (_len_lonlat(channel) / 1000.0) if channel else 0.0
             total_stream_km = sum(_len_lonlat(
@@ -1489,6 +1550,8 @@ def get_watershed_overlay(lat, lon, radius_km=15.0):
 
     if data is None:
         data = _synthetic_watershed(lat, lon, radius_km)
+    elif data.get("is_real"):
+        data = _reconcile_basin_area(data)
 
     if len(_WATERSHED_CACHE) >= _WATERSHED_CACHE_MAX:
         _WATERSHED_CACHE.pop(next(iter(_WATERSHED_CACHE)))
@@ -2267,6 +2330,12 @@ def build_iso_context(results):
             nc.append({"desc": f"Mapa '{mt}' obtenido con mosaico de respaldo.",
                        "causa": "La mediana con control de confianza no se completó en GEE.",
                        "accion": "Usar con cautela; zonas sin control de nubosidad."})
+    morph_r = results.get("morphometry") or {}
+    if morph_r.get("area_aviso"):
+        nc.append({"desc": "Discrepancia en el área de la cuenca.",
+                   "causa": morph_r["area_aviso"],
+                   "accion": "Se adopta el área del polígono dibujado; verificar el "
+                             "punto de cierre con cartografía IGM."})
     if not results.get("scour"):
         nc.append({"desc": "Socavación en puentes no evaluada.",
                    "causa": "No se ingresaron datos del puente (ancho, pilas, estribos, Q).",

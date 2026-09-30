@@ -254,29 +254,43 @@ COMPOSITE_MODES = ("cloudscore", "scl", "mosaico")
 _MIN_OBS = 3   # píxeles con < 3 observaciones despejadas = baja confianza
 
 
-def _s2_base(region, max_cloud, years=("2022-01-01", "2025-01-01")):
-    """Sentinel-2 SR, estación seca (may–sep)."""
+# Tope de escenas por composite. Sin tope, Cloud Score+ con escenas de hasta
+# 60 % de nubes en 3 estaciones secas reunía cientos de imágenes y GEE
+# respondía "User memory limit exceeded" (NDVI/MNDWI); SCL y mosaico daban
+# timeout de 120 s. Se usan solo las escenas MÁS DESPEJADAS.
+_MAX_SCENES = 24
+_MAX_SCENES_MOSAIC = 10
+
+
+def _s2_base(region, max_cloud, years=("2022-01-01", "2025-01-01"),
+             limit=_MAX_SCENES):
+    """Sentinel-2 SR, estación seca (may–sep), las `limit` escenas menos nubosas."""
     return (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
             .filterBounds(region)
             .filterDate(years[0], years[1])
             .filter(ee.Filter.calendarRange(5, 9, "month"))
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud)))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud))
+            .sort("CLOUDY_PIXEL_PERCENTAGE")
+            .limit(limit))
 
 
 def _s2_collection(region, mode, years=("2022-01-01", "2025-01-01")):
     """Colección enmascarada (4 bandas) según el modo de composite."""
     if mode == "cloudscore":
         csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
-        return (_s2_base(region, 60, years)
+        return (_s2_base(region, 30, years)
                 .linkCollection(csp, ["cs_cdf"])
                 .map(lambda i: i.updateMask(i.select("cs_cdf").gte(0.60)))
                 .select(_S2_BANDS))
     if mode == "scl":
-        return _s2_base(region, 20, years).map(_mask_s2_clouds).select(_S2_BANDS)
+        return _s2_base(region, 15, years).map(_mask_s2_clouds).select(_S2_BANDS)
+    # mosaico: pocas escenas despejadas de cualquier mes; la más limpia arriba
     return (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
             .filterBounds(region)
             .filterDate(years[0], years[1])
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))
+            .sort("CLOUDY_PIXEL_PERCENTAGE")
+            .limit(_MAX_SCENES_MOSAIC)
             .map(_mask_s2_clouds).select(_S2_BANDS)
             .sort("CLOUDY_PIXEL_PERCENTAGE", False))
 
@@ -1082,6 +1096,8 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
     region = _build_region(lat, lon, radius_km)
     meta = LAYER_META[map_type]
     classified = _is_classified(map_type, radius_km)
+    if map_type in _INDEX_LAYERS:
+        dimensions = min(dimensions, 768)
     errors = []
     for mode in _modes_for(map_type):
         try:
@@ -1126,8 +1142,8 @@ def compute_class_areas(map_type, lat, lon, radius_km, boundary_lonlat=None):
         res = (ee.Image.pixelArea().divide(1e4).addBands(cls)
                .reduceRegion(reducer=ee.Reducer.sum().group(groupField=1,
                                                             groupName="clase"),
-                             geometry=geom, scale=30, maxPixels=1e10,
-                             bestEffort=True, tileScale=4).getInfo())
+                             geometry=geom, scale=60, maxPixels=1e10,
+                             bestEffort=True, tileScale=8).getInfo())
         groups = {int(g["clase"]): float(g["sum"]) for g in res.get("groups", [])}
         tot = sum(groups.values()) or 1.0
         return [{"clase": lab, "ha": round(groups.get(i, 0.0), 1),
