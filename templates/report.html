@@ -306,7 +306,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">1</span>
   </div>
 
@@ -324,6 +324,7 @@ table tfoot td {
     <p class="no-indent" style="text-indent:0;">Autor: Ing. Luis Franco Guarachi</p>
     <p class="no-indent" style="text-indent:0;"><strong>Creado por: www.frava.tech</strong></p>
   </div>
+  {% include "_iso_control.html" %}
 
 </div>
 
@@ -333,7 +334,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">2</span>
   </div>
 
@@ -371,7 +372,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">3</span>
   </div>
 
@@ -497,7 +498,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">4</span>
   </div>
 
@@ -645,7 +646,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">5</span>
   </div>
 
@@ -791,7 +792,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">6</span>
   </div>
 
@@ -907,18 +908,28 @@ table tfoot td {
     <img src="{{ results.maps[mt] }}" alt="{{ results.map_titles[mt] }}">
     <figcaption><em>Mapa {{ loop.index }}.</em> {{ results.map_titles[mt] }}.{% if results.map_real is defined and not results.map_real.get(mt, true) %} <strong style="color:#c0392b">⚠ DATOS SINTÉTICOS — no representan la cuenca.</strong>{% endif %} Fuente: {{ results.map_sources[mt] }}. Proyección UTM WGS84; cuenca delimitada con parteaguas y cauce principal superpuestos. Autor: Ing. Luis Franco Guarachi · Creador: www.frava.tech.</figcaption>
   </figure>
+  {% include "_class_areas.html" %}
   {% endif %}
   {% endfor %}
+  {% endif %}
+
+  {% if results.ndvi_multi %}
+  <h2>8.7 Análisis Multitemporal de la Vegetación (NDVI por clases)</h2>
+  <p>Composite de estación seca (mayo–septiembre) por año, con los mismos cortes de clase y la misma leyenda en todos los paneles, lo que permite comparar directamente los cambios de cobertura vegetal entre periodos.</p>
+  <figure class="apa-figure" style="page-break-inside:avoid;">
+    <img src="{{ results.ndvi_multi }}" alt="NDVI multitemporal">
+    <figcaption><em>Figura.</em> NDVI por clases — estación seca de cada año (Sentinel-2 L2A, Cloud Score+). {{ results.class_refs['ndvi'] }}. Creador: www.frava.tech.</figcaption>
+  </figure>
   {% endif %}
 
   <!-- CAPÍTULO 9 -->
   <h1>9. Impactos sobre Infraestructura</h1>
 
   <h2>9.1 Socavación en Puentes</h2>
-  <p>La socavación en pilas y estribos de puentes constituye la primera causa de falla de estas estructuras en Bolivia. La profundidad de socavación general se estima mediante la ecuación de Lischtvan-Lebediev (adoptada por el SENAMHI Bolivia), mientras la socavación local en pilas puede calcularse con la fórmula de Richardson y Davis (HEC-18). Para el diámetro de lecho d₅₀ = {{ results.d50 }} mm y las condiciones hidráulicas registradas, la socavación potencial en tramos no cohesivos bajo caudal de diseño Q₁₀₀ = [m³/s] debe verificarse para el tirante máximo de [y_max m], resultando en una profundidad de socavación estimada de [z_sc m].</p>
+  <p>La socavación en pilas y estribos de puentes constituye la primera causa de falla de estas estructuras en Bolivia. La socavación general se estima con Lischtvan-Lebediev y métodos de régimen, la de contracción con Laursen/HEC-18 y la local en pilas y estribos con CSU/HEC-18, Froehlich, Yaroslavtziev, Laursen-Toch, criterio UNAM y Artamonov. {% if results.scour %}Los resultados para los datos de puente ingresados se presentan en la sección 6.6.{% else %}<strong>No se ingresaron datos de puente</strong> (caudal de diseño, ancho del cauce, geometría de pilas y estribos), por lo que la socavación no fue evaluada en esta corrida (ver salidas no conformes, capítulo 11).{% endif %}</p>
 
   <h2>9.2 Sedimentación en Canales de Riego</h2>
-  <p>La tasa de transporte q_{b,mean} = {{ "%.6f"|format((results.transport.meyer_peter_muller + results.transport.van_rijn)/2) }} kg/(m·s) (promedio MPM-VR) permite estimar la tasa de colmatación en canales de derivación. Para un canal de ancho B = [m] operando durante t horas/año, la masa de sedimento depositada sería de [m_sed t/año], equivalente a un volumen de [V m³/año] (densidad seca γ_d ≈ 1 400 kg/m³).</p>
+  <p>La tasa de transporte de fondo promedio q_b = {{ "%.6f"|format((results.transport.meyer_peter_muller + results.transport.van_rijn)/2) }} kg/(m·s) (promedio MPM–Van Rijn) permite estimar la colmatación de canales de derivación: la masa depositada anual es M = q_b · B · t · 3600 (kg/año), con B el ancho de la toma (m) y t las horas de operación al año, y el volumen V = M / γ_d con γ_d ≈ 1 400 kg/m³. Estos parámetros de operación deben definirse en el diseño del canal.</p>
 
   <h2>9.3 Colmatación de Embalses</h2>
   <p>La eficiencia de retención (TE) de embalses frente a sedimentos en suspensión se estima mediante la curva de Brune (1953) en función de la relación capacidad/aportación (C/I). Para cuencas con carga de fondo dominante (Z = {{ results.z_rouse }}), la tasa de sedimentación en fondo de embalse puede superar el 90% del transporte total de fondo, reduciendo la vida útil del vaso y comprometiendo la operación de obras de toma.</p>
@@ -931,7 +942,7 @@ table tfoot td {
 <div class="page">
 
   <div class="page-header">
-    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA</span>
+    <span>TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}</span>
     <span class="page-num">7</span>
   </div>
 
@@ -954,8 +965,10 @@ table tfoot td {
     <li>Se recomienda complementar el análisis con (a) aforos en sección transversal para cuantificar el caudal de sedimentos total, (b) serie de datos hidrométricos para análisis de frecuencia de crecidas, y (c) levantamiento de secciones transversales para la calibración de modelos 1D/2D.</li>
   </ol>
 
-  <!-- CAPÍTULO 11 — ANEXOS -->
-  <h1>11. Apéndices</h1>
+  {% include "_iso_quality.html" %}
+
+  <!-- CAPÍTULO 12 — ANEXOS -->
+  <h1>12. Apéndices</h1>
 
   <h2>Apéndice A: Datos de Campo</h2>
   <p class="no-indent" style="text-indent:0; margin-left: 0.5in;">Fecha/hora: {{ results.date }}&emsp;|&emsp;Coordenadas: {{ results.lat }}°, {{ results.lon }}°</p>

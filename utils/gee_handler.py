@@ -245,37 +245,55 @@ def _hls_composite(region, start="2020-01-01", end="2025-01-01"):
 # sobre 4 bandas en vez de ~23 reduce mucho el cómputo y el riesgo de timeout.
 _S2_BANDS = ["B3", "B4", "B8", "B11"]
 
+# Modos de composite, en orden de intento (el primero que GEE complete gana):
+#   cloudscore : Cloud Score+ (cs_cdf ≥ 0.60, catálogo GEE) — no confunde agua
+#                turbia ni salares con nube, a diferencia de SCL/Sen2Cor.
+#   scl        : máscara SCL de Sen2Cor (respaldo si Cloud Score+ falla).
+#   mosaico    : mosaico por nubosidad (último recurso, muy barato).
+COMPOSITE_MODES = ("cloudscore", "scl", "mosaico")
+_MIN_OBS = 3   # píxeles con < 3 observaciones despejadas = baja confianza
 
-def _s2_composite(region, light=False):
+
+def _s2_base(region, max_cloud, years=("2022-01-01", "2025-01-01")):
+    """Sentinel-2 SR, estación seca (may–sep)."""
+    return (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(region)
+            .filterDate(years[0], years[1])
+            .filter(ee.Filter.calendarRange(5, 9, "month"))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud)))
+
+
+def _s2_collection(region, mode, years=("2022-01-01", "2025-01-01")):
+    """Colección enmascarada (4 bandas) según el modo de composite."""
+    if mode == "cloudscore":
+        csp = ee.ImageCollection("GOOGLE/CLOUD_SCORE_PLUS/V1/S2_HARMONIZED")
+        return (_s2_base(region, 60, years)
+                .linkCollection(csp, ["cs_cdf"])
+                .map(lambda i: i.updateMask(i.select("cs_cdf").gte(0.60)))
+                .select(_S2_BANDS))
+    if mode == "scl":
+        return _s2_base(region, 20, years).map(_mask_s2_clouds).select(_S2_BANDS)
+    return (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(region)
+            .filterDate(years[0], years[1])
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+            .map(_mask_s2_clouds).select(_S2_BANDS)
+            .sort("CLOUDY_PIXEL_PERCENTAGE", False))
+
+
+def _s2_composite(region, mode="cloudscore", years=("2022-01-01", "2025-01-01")):
     """
-    Composite Sentinel-2 SR (10 m) LIVIANO y sin nubes para los índices.
-
-    La versión anterior tomaba TODAS las escenas de 4 años sin prefiltro de
-    nubes (cientos a más de mil imágenes) y les hacía mediana: GEE excedía el
-    tiempo/memoria del thumbnail, la excepción se tragaba y el mapa caía en
-    silencio al respaldo SINTÉTICO (los tres índices salían idénticos).
-
-    Modo normal  : estación seca andino-amazónica (mayo–septiembre) 2022–2024,
-                   escenas con < 20 % de nubes, máscara SCL por píxel, MEDIANA.
-    Modo `light` : reintento barato si la mediana excede el tiempo — escenas
-                   < 60 % de nubes 2022–2024, máscara SCL, MOSAICO (la escena más
-                   despejada queda arriba y las nubes se rellenan con la siguiente).
-    Sin linkCollection / Cloud Score+ (un join más que podía fallar).
+    Composite Sentinel-2 (10 m) sin nubes para los índices.
+    cloudscore / scl → MEDIANA de estación seca, enmascarando los píxeles con
+    menos de 3 observaciones despejadas (capa de confianza: quedan vacíos en
+    vez de rellenarse con datos dudosos). mosaico → la escena más despejada
+    arriba (sin control de confianza; solo último recurso).
     """
-    col = (ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
-           .filterBounds(region)
-           .filterDate("2022-01-01", "2025-01-01"))
-    if not light:
-        col = (col.filter(ee.Filter.calendarRange(5, 9, "month"))
-                  .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
-                  .map(_mask_s2_clouds)
-                  .select(_S2_BANDS))
-        return col.median().clip(region)
-    col = (col.filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
-              .map(_mask_s2_clouds)
-              .select(_S2_BANDS)
-              .sort("CLOUDY_PIXEL_PERCENTAGE", False))
-    return col.mosaic().clip(region)
+    col = _s2_collection(region, mode, years)
+    if mode == "mosaico":
+        return col.mosaic().clip(region)
+    n_obs = col.select("B4").count()
+    return col.median().updateMask(n_obs.gte(_MIN_OBS)).clip(region)
 
 
 def _s2_scene_count(region):
@@ -296,7 +314,7 @@ def _water_mask(s2):
     return jrc.gt(30).Or(mndwi.gt(0.0))
 
 
-def _s2_index(region, kind, light=False):
+def _s2_index(region, kind, mode="cloudscore"):
     """
     Índice espectral desde el composite Sentinel-2 (un único sensor, 10 m).
 
@@ -308,13 +326,13 @@ def _s2_index(region, kind, light=False):
     (2017, Lago Poopó) mostró que NDWI subestima el agua somera y turbia del
     Altiplano boliviano; MNDWI/AWEI/WRI son más exactos.
     """
-    s2 = _s2_composite(region, light=light)
+    s2 = _s2_composite(region, mode=mode)
     if kind == "ndvi":
         return s2.normalizedDifference(["B8", "B4"]).rename("NDVI")
     return s2.normalizedDifference(["B3", "B11"]).rename("MNDWI")
 
 
-def _s2_turbidity(region, light=False):
+def _s2_turbidity(region, mode="cloudscore"):
     """
     Turbidez del agua en FNU (≈ NTU) — algoritmo semi-analítico de banda única
     Nechad (2010/2016) / Dogliotti et al. (2015), sobre Sentinel-2 SR:
@@ -330,7 +348,7 @@ def _s2_turbidity(region, light=False):
     el patrón espacial; para uso cuantitativo conviene VALIDAR con datos de campo
     (HYBAM Rurrenabaque, río Beni).
     """
-    s2 = _s2_composite(region, light=light)
+    s2 = _s2_composite(region, mode=mode)
     red = s2.select("B4").multiply(0.0001).min(0.16)    # ρ acotada < C_rojo
     nir = s2.select("B8").multiply(0.0001).min(0.205)   # ρ acotada < C_NIR
     t_red = red.multiply(228.1).divide(ee.Image(1.0).subtract(red.divide(0.1641)))
@@ -449,21 +467,21 @@ LAYER_META = {
     "ndvi": {
         "vmin": -0.2, "vmax": 0.85,
         "palette": ["#a50026", "#d73027", "#fdae61", "#a6d96a", "#1a9850", "#006837"],
-        "source": "Sentinel-2 L2A (10 m) — NDVI (Rouse 1974), mediana estación seca may–sep 2022–2024, escenas <20 % nubes, máscara SCL",
+        "source": "Sentinel-2 L2A (10 m) — NDVI (Rouse 1974), mediana estación seca may–sep 2022–2024, nubes Cloud Score+ (cs_cdf ≥ 0.60), píxeles con < 3 obs. enmascarados",
         "title": "Índice de Vegetación Normalizado (NDVI)",
         "legend": "NDVI (−1 a +1)",
     },
     "ndwi": {
         "vmin": -0.5, "vmax": 0.5,
         "palette": ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
-        "source": "Sentinel-2 L2A (10–20 m) — MNDWI (Verde−SWIR1, Xu 2006), mediana estación seca may–sep 2022–2024, <20 % nubes, SCL",
+        "source": "Sentinel-2 L2A (10–20 m) — MNDWI (Verde−SWIR1, Xu 2006), mediana estación seca may–sep 2022–2024, nubes Cloud Score+ (cs_cdf ≥ 0.60)",
         "title": "Índice de Agua Modificado (MNDWI)",
         "legend": "MNDWI (−1 a +1)",
     },
     "ndti": {
         "vmin": 0, "vmax": 80,
         "palette": ["#ffffe5", "#fff7bc", "#fee391", "#fec44f", "#fe9929", "#cc4c02"],
-        "source": "Sentinel-2 L2A (10 m) — Turbidez FNU Nechad/Dogliotti, mediana estación seca 2022–2024, solo agua (MNDWI>0 ∪ JRC>30 %)",
+        "source": "Sentinel-2 L2A (10 m) — Turbidez FNU Nechad/Dogliotti, mediana estación seca 2022–2024, Cloud Score+, solo agua (MNDWI>0 ∪ JRC>30 %)",
         "title": "Turbidez del Agua (FNU) — Nechad/Dogliotti",
         "legend": "Turbidez (FNU ≈ NTU)",
     },
@@ -504,10 +522,10 @@ LAYER_META = {
 _LARGE_WINDOW_KM = 60.0
 
 
-def _layer_image(map_type, region, radius_km=15.0, light=False):
+def _layer_image(map_type, region, radius_km=15.0, mode="cloudscore"):
     """Devuelve la ee.Image de banda única para la capa indicada, eligiendo
     la fuente según la escala de la ventana (Sentinel-2 vs MODIS).
-    `light=True` usa el composite barato (mosaico) para reintentar índices."""
+    `mode` elige el composite de los índices (ver COMPOSITE_MODES)."""
     large = radius_km > _LARGE_WINDOW_KM
 
     if map_type == "dem":
@@ -520,17 +538,17 @@ def _layer_image(map_type, region, radius_km=15.0, light=False):
     if map_type == "ndvi":
         if large:
             return _modis_index(region, "ndvi")
-        return _s2_index(region, "ndvi", light=light)
+        return _s2_index(region, "ndvi", mode=mode)
 
     if map_type == "ndwi":
         if large:
             return _modis_index(region, "ndwi")
-        return _s2_index(region, "ndwi", light=light)
+        return _s2_index(region, "ndwi", mode=mode)
 
     if map_type == "ndti":
         if large:
             return _modis_index(region, "ndti")
-        return _s2_turbidity(region, light=light)
+        return _s2_turbidity(region, mode=mode)
 
     if map_type == "manning":
         lc = ee.Image("ESA/WorldCover/v100/2020").select("Map").clip(region)
@@ -929,16 +947,47 @@ def fetch_watershed_data(lat, lon, radius_km=15.0):
 _DYNAMIC_STRETCH = {"dem", "slope", "ndvi", "ndwi", "ndti"}
 
 
-# Índices espectrales: se reintentan con el composite barato (mosaico) si la
-# mediana excede el tiempo/memoria de GEE.
+# Índices espectrales: se reintentan con otro composite si GEE no completa.
 _INDEX_LAYERS = {"ndvi", "ndwi", "ndti"}
 # Capas que por diseño solo tienen datos sobre agua (no se exige cobertura).
 _SPARSE_LAYERS = {"ndti", "jrc"}
 
-# Último error por capa (para que la app lo muestre en vez de ocultarlo) y modo
-# con el que se obtuvo la última imagen real ("mediana" / "mosaico").
+# Esquemas de CLASES con cortes fijos y citados (mismos cortes en todos los
+# periodos, para que los mapas sean comparables). Paletas aptas para
+# daltonismo (BrBG / YlOrBr de ColorBrewer), no rojo-verde.
+CLASS_SCHEMES = {
+    "ndvi": {   # SciELO Perú RIA 26(2) 2024 (Amazonía, GEE); <0.1 agua/suelo
+        "breaks": [0.1, 0.2, 0.4, 0.6],
+        "labels": ["Agua / sin vegetación (< 0.1)",
+                   "Suelo desnudo (0.1 – 0.2)",
+                   "Vegetación escasa (0.2 – 0.4)",
+                   "Vegetación moderada (0.4 – 0.6)",
+                   "Vegetación densa (> 0.6)"],
+        "colors": ["#8c510a", "#d8b365", "#f6e8c3", "#5ab4ac", "#01665e"],
+        "ref": "Cortes 0.1/0.2/0.4/0.6 (SciELO Perú RIA 26(2), 2024; Redalyc 407)",
+    },
+    "ndwi": {   # MNDWI Xu (2006): > 0 agua; 0–0.2 somera/húmeda
+        "breaks": [0.0, 0.2],
+        "labels": ["Seco (< 0)", "Humedad / agua somera (0 – 0.2)",
+                   "Agua (> 0.2)"],
+        "colors": ["#d8b365", "#c7eae5", "#2166ac"],
+        "ref": "Umbral 0 (Xu 2006); 0–0.2 transición (Space4Water)",
+    },
+    "ndti": {   # Turbidez FNU (Nechad/Dogliotti); banda roja satura ~250 FNU
+        "breaks": [10.0, 100.0, 250.0],
+        "labels": ["Baja (< 10 FNU)", "Media (10 – 100 FNU)",
+                   "Alta (100 – 250 FNU)", "Muy alta / saturada (> 250 FNU)"],
+        "colors": ["#ffffd4", "#fed98e", "#fe9929", "#993404"],
+        "ref": "Cortes propuestos: 10 FNU (detección NDTI, IWA WQRJ 60(4)); "
+               "250 FNU (saturación banda roja, Dogliotti et al. 2015)",
+    },
+}
+
+# Último error por capa (para mostrarlo, nunca ocultarlo), modo de composite
+# de la última imagen real y capas renderizadas como mapa de clases.
 _LAST_ERRORS = {}
 _LAST_MODE = {}
+_LAST_CLASSIFIED = set()
 
 
 def last_layer_errors():
@@ -951,38 +1000,66 @@ def last_layer_modes():
     return dict(_LAST_MODE)
 
 
-def _render_thumb(img, map_type, region, meta, dimensions):
+def last_classified():
+    """Capas cuya última imagen real se renderizó como mapa de clases."""
+    return set(_LAST_CLASSIFIED)
+
+
+def _classify(img, breaks):
+    """Índice continuo → imagen de clases 0..n (conserva la máscara)."""
+    cls = ee.Image(0)
+    for b in breaks:
+        cls = cls.add(img.gte(b))
+    return cls.updateMask(img.mask()).rename("clase")
+
+
+def _modes_for(map_type):
+    return COMPOSITE_MODES if map_type in _INDEX_LAYERS else ("cloudscore",)
+
+
+def _is_classified(map_type, radius_km):
+    # Las clases solo aplican al índice Sentinel-2 (en mega-cuencas se usa
+    # MODIS, cuyo "ndti" es un índice relativo, no FNU).
+    return map_type in CLASS_SCHEMES and radius_km <= _LARGE_WINDOW_KM
+
+
+def _render_thumb(img, map_type, region, meta, dimensions, classified=False):
     """Renderiza una ee.Image a array RGBA vía getThumbURL. Lanza excepción con
     el mensaje REAL del servidor de GEE si la petición falla."""
     import requests
     from matplotlib import image as mpimg
 
-    vmin, vmax = meta["vmin"], meta["vmax"]
-    if map_type in _DYNAMIC_STRETCH:
-        try:
-            stats = img.reduceRegion(
-                reducer=ee.Reducer.percentile([2, 98]),
-                geometry=region,
-                scale=300 if map_type in _INDEX_LAYERS else 150,
-                maxPixels=1e9, bestEffort=True,
-            ).getInfo() or {}
-            vals = [v for v in stats.values() if v is not None]
-            if len(vals) >= 2:
-                lo, hi = min(vals), max(vals)
-                if hi - lo > 1e-6:
-                    vmin, vmax = float(lo), float(hi)
-        except Exception as se:
-            print(f"dynamic stretch failed for '{map_type}': {se}")
+    if classified:
+        sch = CLASS_SCHEMES[map_type]
+        n = len(sch["colors"])
+        vis = _classify(img, sch["breaks"]).visualize(
+            min=0, max=n - 1, palette=sch["colors"])
+        vmin, vmax = 0, n - 1
+    else:
+        vmin, vmax = meta["vmin"], meta["vmax"]
+        if map_type in _DYNAMIC_STRETCH:
+            try:
+                stats = img.reduceRegion(
+                    reducer=ee.Reducer.percentile([2, 98]),
+                    geometry=region,
+                    scale=300 if map_type in _INDEX_LAYERS else 150,
+                    maxPixels=1e9, bestEffort=True,
+                ).getInfo() or {}
+                vals = [v for v in stats.values() if v is not None]
+                if len(vals) >= 2:
+                    lo, hi = min(vals), max(vals)
+                    if hi - lo > 1e-6:
+                        vmin, vmax = float(lo), float(hi)
+            except Exception as se:
+                print(f"dynamic stretch failed for '{map_type}': {se}")
+        vis = img.visualize(min=vmin, max=vmax, palette=meta["palette"])
 
-    vis = img.visualize(min=vmin, max=vmax, palette=meta["palette"])
     url = vis.getThumbURL({"region": region, "dimensions": dimensions,
                            "format": "png"})
     resp = requests.get(url, timeout=120)
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code} de GEE: {resp.text[:300]}")
     arr = mpimg.imread(io.BytesIO(resp.content))
-    # Imagen vacía (composite sin escenas o todo enmascarado) = fallo, salvo
-    # en capas que solo existen sobre agua.
     if (map_type not in _SPARSE_LAYERS and arr.ndim == 3
             and arr.shape[2] == 4 and float((arr[..., 3] > 0).mean()) < 0.02):
         raise RuntimeError("GEE devolvió una imagen vacía (sin escenas válidas "
@@ -994,28 +1071,29 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
     """
     Obtiene la imagen renderizada real desde GEE (getThumbURL).
 
-    Retorna (arr, vmin, vmax): array numpy RGB(A) float [0..1] y el rango de
-    valores usado para la paleta. Devuelve None si GEE no está disponible o
-    todos los intentos fallan; en ese caso el error real queda en
-    last_layer_errors()[map_type] para mostrarlo (nunca se oculta).
-
-    Índices (NDVI, MNDWI, turbidez): 1er intento mediana de estación seca; si
-    falla, 2do intento con mosaico (mucho más barato).
+    Retorna (arr, vmin, vmax) o None. Índices: se intenta Cloud Score+ →
+    SCL → mosaico; NDVI/MNDWI/turbidez se renderizan como MAPA DE CLASES con
+    los cortes de CLASS_SCHEMES. Si todo falla, el error real queda en
+    last_layer_errors()[map_type] (nunca se oculta).
     """
     if not _GEE_READY:
         _LAST_ERRORS[map_type] = {"error": "GEE no inicializado", "mode": None}
         return None
     region = _build_region(lat, lon, radius_km)
     meta = LAYER_META[map_type]
-    modes = [False, True] if map_type in _INDEX_LAYERS else [False]
+    classified = _is_classified(map_type, radius_km)
     errors = []
-    for light in modes:
-        mode = "mosaico" if light else "mediana"
+    for mode in _modes_for(map_type):
         try:
-            img = _layer_image(map_type, region, radius_km=radius_km, light=light)
-            out = _render_thumb(img, map_type, region, meta, dimensions)
+            img = _layer_image(map_type, region, radius_km=radius_km, mode=mode)
+            out = _render_thumb(img, map_type, region, meta, dimensions,
+                                classified=classified)
             _LAST_ERRORS.pop(map_type, None)
             _LAST_MODE[map_type] = mode
+            if classified:
+                _LAST_CLASSIFIED.add(map_type)
+            else:
+                _LAST_CLASSIFIED.discard(map_type)
             return out
         except Exception as e:
             msg = f"[{mode}] {e}"
@@ -1023,15 +1101,82 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
             print(f"GEE thumbnail fetch failed for '{map_type}': {msg}")
     _LAST_ERRORS[map_type] = {"error": " | ".join(errors)[:600], "mode": None}
     _LAST_MODE.pop(map_type, None)
+    _LAST_CLASSIFIED.discard(map_type)
     return None
+
+
+def compute_class_areas(map_type, lat, lon, radius_km, boundary_lonlat=None):
+    """
+    Hectáreas por clase dentro de la cuenca (o de la ventana si no hay
+    polígono), con el mismo composite que salió en el mapa. Devuelve
+    [{"clase", "ha", "pct"}] o None.
+    """
+    if not _GEE_READY or not _is_classified(map_type, radius_km):
+        return None
+    mode = _LAST_MODE.get(map_type)
+    if not mode:
+        return None
+    try:
+        region = _build_region(lat, lon, radius_km)
+        geom = (ee.Geometry.Polygon([boundary_lonlat])
+                if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+        sch = CLASS_SCHEMES[map_type]
+        cls = _classify(_layer_image(map_type, region, radius_km, mode=mode),
+                        sch["breaks"])
+        res = (ee.Image.pixelArea().divide(1e4).addBands(cls)
+               .reduceRegion(reducer=ee.Reducer.sum().group(groupField=1,
+                                                            groupName="clase"),
+                             geometry=geom, scale=30, maxPixels=1e10,
+                             bestEffort=True, tileScale=4).getInfo())
+        groups = {int(g["clase"]): float(g["sum"]) for g in res.get("groups", [])}
+        tot = sum(groups.values()) or 1.0
+        return [{"clase": lab, "ha": round(groups.get(i, 0.0), 1),
+                 "pct": round(100.0 * groups.get(i, 0.0) / tot, 1)}
+                for i, lab in enumerate(sch["labels"])]
+    except Exception as e:
+        print(f"class areas failed for '{map_type}': {e}")
+        return None
+
+
+def fetch_ndvi_multiyear(lat, lon, radius_km, years=(2022, 2023, 2024),
+                         dimensions=512):
+    """
+    Serie multitemporal de NDVI por clases: un composite de estación seca por
+    año, mismos cortes y leyenda. Devuelve {año: array RGBA} (años que fallen
+    se omiten) — base del panel comparativo del informe.
+    """
+    import requests
+    from matplotlib import image as mpimg
+    out = {}
+    if not _GEE_READY:
+        return out
+    region = _build_region(lat, lon, radius_km)
+    sch = CLASS_SCHEMES["ndvi"]
+    for y in years:
+        span = (f"{y}-01-01", f"{y + 1}-01-01")
+        for mode in ("cloudscore", "scl"):
+            try:
+                s2 = _s2_composite(region, mode=mode, years=span)
+                cls = _classify(s2.normalizedDifference(["B8", "B4"]),
+                                sch["breaks"])
+                url = cls.visualize(min=0, max=len(sch["colors"]) - 1,
+                                    palette=sch["colors"]).getThumbURL(
+                    {"region": region, "dimensions": dimensions,
+                     "format": "png"})
+                r = requests.get(url, timeout=120)
+                if r.status_code == 200:
+                    out[y] = mpimg.imread(io.BytesIO(r.content))
+                    break
+            except Exception as e:
+                print(f"NDVI {y} [{mode}] failed: {e}")
+    return out
 
 
 def debug_layer(map_type, lat, lon, radius_km=15.0):
     """
     Diagnóstico de una capa en vivo: nº de escenas Sentinel-2, estadísticas
-    (mín/máx/nº de píxeles válidos) y resultado del thumbnail por cada modo.
-    Permite ver el error EXACTO de GEE y comprobar que NDVI, MNDWI y turbidez
-    dan valores distintos (no el mismo patrón).
+    (mín/máx/media/nº de píxeles válidos) y resultado del thumbnail por cada
+    modo de composite, con el error EXACTO de GEE.
     """
     import time
     import requests
@@ -1045,16 +1190,17 @@ def debug_layer(map_type, lat, lon, radius_km=15.0):
         return out
     region = _build_region(lat, lon, radius_km)
     if map_type in _INDEX_LAYERS and radius_km <= _LARGE_WINDOW_KM:
-        try:
-            out["s2_escenas_mediana"] = _s2_scene_count(region).getInfo()
-        except Exception as e:
-            out["s2_escenas_error"] = str(e)[:300]
+        for mode in ("cloudscore", "scl"):
+            try:
+                out[f"s2_escenas_{mode}"] = _s2_collection(region, mode).size().getInfo()
+            except Exception as e:
+                out[f"s2_escenas_{mode}_error"] = str(e)[:300]
     meta = LAYER_META[map_type]
-    for light in ([False, True] if map_type in _INDEX_LAYERS else [False]):
-        step = {"modo": "mosaico" if light else "mediana"}
+    for mode in _modes_for(map_type):
+        step = {"modo": mode}
         t0 = time.time()
         try:
-            img = _layer_image(map_type, region, radius_km=radius_km, light=light)
+            img = _layer_image(map_type, region, radius_km=radius_km, mode=mode)
             red = (ee.Reducer.minMax()
                    .combine(ee.Reducer.mean(), sharedInputs=True)
                    .combine(ee.Reducer.count(), sharedInputs=True))
@@ -1078,10 +1224,6 @@ def debug_layer(map_type, lat, lon, radius_km=15.0):
         out["steps"].append(step)
     return out
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# FUNCIONES PUNTUALES PARA LA CALCULADORA (sin cambios funcionales)
-# ════════════════════════════════════════════════════════════════════════════
 
 def get_slope_from_dem(lat, lon, buffer_m=100):
     point = ee.Geometry.Point([lon, lat])

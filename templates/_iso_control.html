@@ -1,0 +1,42 @@
+{# Control documental — ISO 9001:2015 §7.5.2 / §7.5.3 / §8.5.2 #}
+{% if results.doc %}
+<div class="iso-control" style="margin-top:1.2em; page-break-inside:avoid;">
+  <table style="width:100%; font-size:8.5pt; border-collapse:collapse;">
+    <tbody>
+      <tr><th style="text-align:left; width:30%;">Código del documento</th><td class="mono"><strong>{{ results.doc.codigo }}</strong></td></tr>
+      <tr><th style="text-align:left;">Revisión / estado</th><td>{{ results.doc.revision }} — {{ results.doc.estado }}</td></tr>
+      <tr><th style="text-align:left;">Fecha de emisión</th><td>{{ results.doc.fecha }}</td></tr>
+      <tr><th style="text-align:left;">ID de corrida (trazabilidad)</th><td class="mono">{{ results.doc.run_id }}</td></tr>
+      <tr><th style="text-align:left;">Software generador</th><td>{{ results.doc.generador }} · versión {{ results.doc.app_version }} · creado por {{ results.doc.creador }}</td></tr>
+      <tr><th style="text-align:left;">Formato</th><td>Informe técnico HTML / PDF · idioma español</td></tr>
+    </tbody>
+  </table>
+
+  <table style="width:100%; font-size:8.5pt; border-collapse:collapse; margin-top:0.8em;">
+    <thead><tr><th></th><th>Nombre</th><th>Cargo</th><th>Firma</th><th>Fecha</th></tr></thead>
+    <tbody>
+      <tr><th style="text-align:left;">Elaboró</th><td>{{ results.doc.elaboro }}</td><td>Ingeniero responsable</td><td>&nbsp;</td><td>{{ results.doc.fecha[:10] }}</td></tr>
+      <tr><th style="text-align:left;">Revisó</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+      <tr><th style="text-align:left;">Aprobó</th><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>
+    </tbody>
+  </table>
+
+  <p class="no-indent" style="text-indent:0; font-size:8pt; margin-top:0.6em;"><strong>Historial de revisiones</strong></p>
+  <table style="width:100%; font-size:8pt; border-collapse:collapse;">
+    <thead><tr><th>Rev.</th><th>Fecha</th><th>Descripción del cambio</th><th>Autor</th></tr></thead>
+    <tbody>
+      {% for r in results.doc.revisiones %}
+      <tr><td>{{ r.rev }}</td><td>{{ r.fecha }}</td><td>{{ r.desc }}</td><td>{{ r.autor }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="no-indent" style="text-indent:0; font-size:7.5pt; color:#444; margin-top:0.6em;">
+    Documento estructurado conforme a los requisitos de <strong>ISO 9001:2015</strong> (información documentada,
+    trazabilidad, verificación, salidas no conformes y liberación) y a los modelos de calidad
+    <strong>ISO/IEC 25010:2023</strong> (producto software) e <strong>ISO/IEC 25012:2008</strong> (datos).
+    La certificación ISO corresponde al sistema de gestión de la organización, no a este informe.
+    Copia no controlada si se imprime.
+  </p>
+</div>
+{% endif %}

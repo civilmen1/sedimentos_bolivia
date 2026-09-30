@@ -7,8 +7,9 @@
 @page {
   size: letter;
   margin: 1in;
-  @top-left  { content: "TRANSPORTE DE SEDIMENTOS — BOLIVIA"; font-family: "Liberation Serif","Times New Roman",serif; font-size: 10pt; }
-  @top-right { content: counter(page); font-family: "Liberation Serif","Times New Roman",serif; font-size: 10pt; }
+  @top-left  { content: "TRANSPORTE DE SEDIMENTOS — BOLIVIA{% if results.doc %} · {{ results.doc.codigo }} · {{ results.doc.revision }}{% endif %}"; font-family: "Liberation Serif","Times New Roman",serif; font-size: 8pt; }
+  @top-right { content: "Pág. " counter(page) " de " counter(pages); font-family: "Liberation Serif","Times New Roman",serif; font-size: 9pt; }
+  @bottom-center { content: "{% if results.doc %}ID de corrida {{ results.doc.run_id }} · {{ results.doc.app_version }} · {% endif %}Creado por www.frava.tech · Copia no controlada si se imprime"; font-family: "Liberation Serif","Times New Roman",serif; font-size: 7pt; color: #555; }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -63,6 +64,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 <p class="no-indent" style="text-align:center;">Punto: {{ results.lat }}°, {{ results.lon }}°</p>
 <p class="no-indent" style="text-align:center;">Autor: Ing. Luis Franco Guarachi</p>
 <p class="no-indent" style="text-align:center;font-weight:bold;">Creado por: www.frava.tech</p>
+{% include "_iso_control.html" %}
 
 <!-- ═══════════════════ RESUMEN ═══════════════════ -->
 <div class="page-break"></div>
@@ -361,8 +363,17 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
   <img src="{{ results.maps[mt] }}" alt="{{ results.map_titles[mt] }}">
   <figcaption><em>Mapa {{ loop.index }}.</em> {{ results.map_titles[mt] }}.{% if results.map_real is defined and not results.map_real.get(mt, true) %} <strong style="color:#c0392b">⚠ DATOS SINTÉTICOS — no representan la cuenca.</strong>{% endif %} Fuente: {{ results.map_sources[mt] }}. Proyección UTM WGS84; cuenca delimitada con parteaguas y cauce principal. Autor: Ing. Luis Franco Guarachi · Creador: www.frava.tech.</figcaption>
 </figure>
+{% include "_class_areas.html" %}
 {% endif %}
 {% endfor %}
+{% endif %}
+{% if results.ndvi_multi %}
+<h2>8.7 Análisis Multitemporal de la Vegetación (NDVI por clases)</h2>
+<p>Composite de estación seca por año, con cortes y leyenda idénticos en todos los paneles.</p>
+<figure class="apa-figure" style="page-break-inside:avoid;">
+  <img src="{{ results.ndvi_multi }}" alt="NDVI multitemporal">
+  <figcaption><em>Figura.</em> NDVI por clases por año (Sentinel-2 L2A, Cloud Score+). {{ results.class_refs['ndvi'] }}.</figcaption>
+</figure>
 {% endif %}
 
 <!-- ═══════════════════ CAP. 9 ═══════════════════ -->
@@ -401,7 +412,7 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 
 <p class="tbl-note no-indent" style="font-size:8pt; margin-top:0.6em;"><strong>Alcance de la percepción remota.</strong> La socavación no se mide con satélite: los sensores ópticos (Landsat, Sentinel-2) solo leen la superficie del agua y no penetran la columna turbia durante la avenida, que es cuando ocurre la fosa. Google Earth Engine aporta <em>insumos</em> de estas fórmulas (ancho del cauce B y B_e, W₁/W₂ por contracción, pendiente S, cobertura/rugosidad, aporte de sedimento por RUSLE), pero la profundidad de socavación debe verificarse con batimetría, ecosonda o instrumentación sumergida en la pila.</p>
 <h2>9.2 Sedimentación en Canales</h2>
-<p>La tasa promedio MPM-VR es q_b = {{ "%.6f"|format((results.transport.meyer_peter_muller + results.transport.van_rijn)/2) }} kg/(m·s). Para un canal de B metros de ancho operando t horas/año, la masa de sedimento depositada = q_b × B × t × 3600 [kg/año].</p>
+<p>La tasa promedio MPM-VR es q_b = {{ "%.6f"|format((results.transport.meyer_peter_muller + results.transport.van_rijn)/2) }} kg/(m·s). Para un canal de B metros de ancho operando t horas/año, la masa de sedimento depositada es M = q_b × B × t × 3600 (kg/año); B y t deben definirse en el diseño del canal.</p>
 <h2>9.3 Colmatación de Embalses</h2>
 <p>La eficiencia de retención se estima con la curva de Brune (1953) en función de la relación capacidad/aportación (C/I). Para Z = {{ results.z_rouse }}, la carga {% if results.z_rouse > 2.5 %}de fondo{% else %}en suspensión{% endif %} es dominante.</p>
 
@@ -418,7 +429,8 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 </ul>
 
 <!-- ═══════════════════ CAP. 11 ═══════════════════ -->
-<h1>11. Apéndices</h1>
+{% include "_iso_quality.html" %}
+<h1>12. Apéndices</h1>
 <p><strong>Apéndice A.</strong> Datos de campo: coordenadas, sección transversal, mediciones velocimétri­cas.</p>
 <p><strong>Apéndice B.</strong> Curva granulométrica (Figura 1, obtenida por tamizado ASTM D422 / NB 1075).</p>
 <p><strong>Apéndice C.</strong> Ecuaciones detalladas de Van Rijn (1984) y Meyer-Peter y Müller (1948).</p>

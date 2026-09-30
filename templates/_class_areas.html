@@ -1,0 +1,12 @@
+{# Superficie por clase dentro de la cuenca (requiere variable `mt`) #}
+{% if results.class_areas and results.class_areas.get(mt) %}
+<table style="width:70%; margin:0.3em auto 0.8em; font-size:8pt; page-break-inside:avoid;">
+  <thead><tr><th>Clase</th><th style="text-align:right;">Superficie (ha)</th><th style="text-align:right;">%</th></tr></thead>
+  <tbody>
+  {% for a in results.class_areas[mt] %}
+    <tr><td>{{ a.clase }}</td><td style="text-align:right;">{{ "{:,.1f}".format(a.ha) }}</td><td style="text-align:right;">{{ a.pct }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="no-indent" style="text-indent:0; font-size:7.5pt; text-align:center; color:#555;">Superficie calculada en GEE dentro del parteaguas (escala 30 m). {{ results.class_refs[mt] }}.</p>
+{% endif %}
