@@ -57,6 +57,10 @@ from utils.gee_handler import (
     hist_epochs,
     hist_sensors,
     mann_kendall_sen,
+    fetch_ndvi_trend,
+    summarize_trend_cells,
+    TREND_SCHEME,
+    PRIORITY_SCHEME,
     HIST_YEARS,
     CLASS_SCHEMES
 )
@@ -68,7 +72,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v44-serie-20-anios"
+APP_VERSION = "v45-informe-ndvi"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -2154,6 +2158,16 @@ def generate_all_thematic_maps(lat, lon, radius_km=15.0):
                 _MULTI["series"] = _history_series_chart(hist)
         except Exception as e:
             print(f"Análisis temporal Landsat falló: {e}")
+        try:
+            tr = fetch_ndvi_trend(clat, clon, R, boundary)
+            summ = summarize_trend_cells(tr.get("cells") or {})
+            _MULTI["trend"] = {**{k: v for k, v in tr.items()
+                                  if k not in ("trend_img", "prio_img", "cells")},
+                               "summary": summ}
+            if tr.get("trend_img") is not None or tr.get("prio_img") is not None:
+                _MULTI["trend_map"] = _trend_priority_panel(tr, clat, clon, R, wd)
+        except Exception as e:
+            print(f"Tendencia NDVI por píxel falló: {e}")
     return maps
 
 
@@ -2397,8 +2411,21 @@ def _history_summary(hist):
         d = (vals[-1]["pct"] - vals[0]["pct"]) if len(vals) >= 2 else None
         rows.append({"clase": lab, "vals": vals,
                      "delta": round(d, 1) if d is not None else None})
+    stats = None
+    vals = [r["ndvi"] for r in series if r.get("ndvi") is not None]
+    if len(vals) >= 3:
+        mu = sum(vals) / len(vals)
+        sd = (sum((v - mu) ** 2 for v in vals) / (len(vals) - 1)) ** 0.5
+        hi = max(series, key=lambda r: r["ndvi"])
+        lo = min(series, key=lambda r: r["ndvi"])
+        stats = {"mean": round(mu, 3), "sd": round(sd, 3),
+                 "cv": round(100 * sd / mu, 1) if mu > 0 else None,
+                 "max": hi["ndvi"], "max_year": hi["year"],
+                 "min": lo["ndvi"], "min_year": lo["year"],
+                 "first": series[0]["ndvi"], "last": series[-1]["ndvi"]}
     return {
         "years": HIST_YEARS,
+        "ndvi_stats": stats,
         "first": yrs[0] if yrs else None, "last": yrs[-1] if yrs else None,
         "epochs": epochs,
         "sensors": {y: ", ".join(hist_sensors(y)) for y in epochs},
@@ -2462,6 +2489,40 @@ def _ndvi_epochs_panel(hist, lat, lon, radius_km, wd):
              "Composite mediana de 3 estaciones secas (may–sep) centrado en el año; "
              "cortes fijos idénticos en todas las épocas", ha="center", fontsize=6.5)
     fig.subplots_adjust(bottom=0.12, top=0.92, wspace=0.08, hspace=0.16)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _trend_priority_panel(tr, lat, lon, radius_km, wd):
+    """Mapas lado a lado: tendencia de Sen del NDVI y zonas de prioridad."""
+    from matplotlib.patches import Patch
+    deg_lat = radius_km / 111.0
+    deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
+    ext = [lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat]
+    bnd = (wd or {}).get("boundary") or []
+    panels = [("trend_img", "Tendencia del NDVI (pendiente de Sen)", TREND_SCHEME),
+              ("prio_img", "Zonas de prioridad", PRIORITY_SCHEME)]
+    panels = [p for p in panels if tr.get(p[0]) is not None]
+    fig, axes = plt.subplots(1, len(panels), figsize=(6.2 * len(panels), 7.2), dpi=120)
+    axes = axes if len(panels) > 1 else [axes]
+    for ax, (key, title, sch) in zip(axes, panels):
+        ax.imshow(tr[key], extent=ext, origin="upper", aspect="auto")
+        if len(bnd) > 2:
+            ax.plot([p[0] for p in bnd], [p[1] for p in bnd], color="#222222", lw=1.2)
+        ax.set_title(title, fontsize=10, fontweight="bold")
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.legend(handles=[Patch(color=c, label=l) for c, l in
+                           zip(sch["colors"], sch["labels"])],
+                  loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=1,
+                  fontsize=7, frameon=False)
+    fig.suptitle(f"NDVI interanual {tr.get('first')}–{tr.get('last')} — tendencia por píxel "
+                 "y priorización (Landsat armonizado + SRTM)", fontsize=11, fontweight="bold")
+    fig.text(0.5, 0.005, f"Creador: {MAP_CREATOR}  |  Autor: {MAP_AUTHOR}  |  "
+             f"Píxeles con ≥ {tr.get('min_years')} años válidos; agua excluida; "
+             f"ladera = pendiente ≥ {tr.get('steep_deg')}°", ha="center", fontsize=6.5)
+    fig.subplots_adjust(bottom=0.2, top=0.9, wspace=0.06)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
@@ -3299,6 +3360,7 @@ def report():
         results = {
             "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "lat": lat, "lon": lon,
+            "area_name": (request.args.get("area") or "").strip()[:120],
             "d50": d50, "d90": d90, "rho_s": rho_s,
             "temp": temp, "depth": depth, "velocity": velocity,
             "slope": round(slope, 8),
@@ -3392,6 +3454,8 @@ def report():
             results["ndvi_multi"] = _MULTI.get("ndvi")
             results["ndvi_series"] = _MULTI.get("series")
             results["hist"] = _MULTI.get("hist")
+            results["trend"] = _MULTI.get("trend")
+            results["trend_map"] = _MULTI.get("trend_map")
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
@@ -3453,6 +3517,7 @@ def report_pdf():
         results = {
             "date": datetime.now().strftime("%d/%m/%Y %H:%M"),
             "lat": lat, "lon": lon,
+            "area_name": (request.args.get("area") or "").strip()[:120],
             "d50": d50, "d90": d90, "rho_s": rho_s,
             "temp": temp, "depth": depth, "velocity": velocity,
             "slope": round(slope, 8),
@@ -3546,6 +3611,8 @@ def report_pdf():
             results["ndvi_multi"] = _MULTI.get("ndvi")
             results["ndvi_series"] = _MULTI.get("series")
             results["hist"] = _MULTI.get("hist")
+            results["trend"] = _MULTI.get("trend")
+            results["trend_map"] = _MULTI.get("trend_map")
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}

@@ -1338,6 +1338,204 @@ def fetch_ndvi_history(lat, lon, radius_km, boundary_lonlat=None,
     return out
 
 
+# ── Tendencia NDVI por píxel y zonificación de prioridades ───────────────
+# Umbrales operativos (documentados en el informe): ±0.002 NDVI/año equivale
+# a ±0.04 en 20 años; ±0.005/año a ±0.10. Pendiente crítica 15° (laderas
+# donde la pérdida de cobertura favorece erosión y movimientos en masa).
+TREND_SCHEME = {
+    "breaks": [-0.005, -0.002, 0.002, 0.005],
+    "labels": ["Disminución fuerte (< −0.005/año)",
+               "Disminución (−0.005 a −0.002/año)",
+               "Estable (±0.002/año)",
+               "Incremento (0.002 a 0.005/año)",
+               "Incremento fuerte (> 0.005/año)"],
+    "colors": ["#8c510a", "#d8b365", "#d9d9d9", "#5ab4ac", "#01665e"],
+}
+PRIORITY_SCHEME = {
+    "labels": ["Crítica: disminución del NDVI en ladera ≥ 15°",
+               "Alta: disminución del NDVI, o alta variabilidad en ladera ≥ 15°",
+               "Media: suelo expuesto (NDVI < 0.2) en ladera ≥ 15°",
+               "Conservación: NDVI ≥ 0.4 estable o creciente",
+               "Baja: sin señal de degradación"],
+    "colors": ["#b2182b", "#ef8a62", "#fddbc7", "#1b7837", "#e0e0e0"],
+}
+BAND_LABELS = ["Cuenca baja", "Cuenca media", "Cuenca alta"]
+TREND_DECLINE = -0.002
+STEEP_DEG = 15
+HIGH_VAR = 0.08
+MIN_YEARS = 10
+
+
+def _ndvi_trend_images(region, first, last):
+    """Imágenes por píxel: pendiente de Sen, media, desvío y nº de años."""
+    def per_year(y):
+        y = ee.Number(y)
+        d0 = ee.Date.fromYMD(y, 1, 1)
+        comp = _landsat_median(_landsat_collection(region, d0, d0.advance(1, "year")))
+        ndvi = comp.normalizedDifference(["nir", "red"]).rename("ndvi")
+        t = ee.Image(y.subtract(first)).toFloat().rename("t")
+        return t.updateMask(ndvi.mask()).addBands(ndvi)
+    col = ee.ImageCollection(ee.List.sequence(first, last).map(per_year))
+    sen = col.select(["t", "ndvi"]).reduce(ee.Reducer.sensSlope()).select("slope")
+    stats = col.select("ndvi").reduce(
+        ee.Reducer.mean().combine(ee.Reducer.stdDev(), sharedInputs=True)
+        .combine(ee.Reducer.count(), sharedInputs=True))
+    n = stats.select("ndvi_count")
+    ok = n.gte(MIN_YEARS).And(stats.select("ndvi_mean").gte(0))  # sin agua
+    return (sen.updateMask(ok).rename("sen"),
+            stats.select("ndvi_mean").updateMask(ok).rename("mean"),
+            stats.select("ndvi_stdDev").updateMask(ok).rename("std"))
+
+
+def fetch_ndvi_trend(lat, lon, radius_km, boundary_lonlat=None,
+                     dimensions=512, last=None):
+    """
+    Tendencia interanual del NDVI por píxel (Sen, estación seca, Landsat
+    armonizado) y zonificación de prioridades con la pendiente SRTM.
+
+    Devuelve dict con thumbnails RGBA ("trend_img", "prio_img"), áreas por
+    clase de tendencia y de prioridad (% y ha), su reparto por tercio
+    altitudinal de la cuenca, y estadísticos globales.
+    """
+    import requests
+    from matplotlib import image as mpimg
+    out = {"errors": []}
+    if not _GEE_READY:
+        return out
+    last = last or hist_last_year()
+    first = last - HIST_YEARS
+    region = _build_region(lat, lon, radius_km)
+    geom = (ee.Geometry.Polygon([boundary_lonlat])
+            if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+    scale = _hist_scale(radius_km)
+    out.update({"first": first, "last": last, "scale_m": scale,
+                "breaks": TREND_SCHEME["breaks"], "steep_deg": STEEP_DEG,
+                "high_var": HIGH_VAR, "min_years": MIN_YEARS})
+    try:
+        sen, mean, std = _ndvi_trend_images(region, first, last)
+        dem = ee.Image("USGS/SRTMGL1_003").select("elevation")
+        slope = ee.Terrain.slope(dem)
+        trend = _classify(sen, TREND_SCHEME["breaks"])
+        steep = slope.gte(STEEP_DEG)
+        decl = sen.lt(TREND_DECLINE)
+        # Prioridad (excluyentes, en orden de precedencia)
+        prio = (ee.Image(4)
+                .where(mean.gte(0.4).And(sen.gte(TREND_DECLINE)), 3)
+                .where(mean.lt(0.2).And(steep), 2)
+                .where(decl.Or(std.gte(HIGH_VAR).And(steep)), 1)
+                .where(decl.And(steep), 0)
+                .updateMask(sen.mask()).rename("prio"))
+        # Tercios altitudinales dentro de la cuenca
+        pct = dem.reduceRegion(ee.Reducer.percentile([33, 66]), geom,
+                               scale=max(scale, 90), maxPixels=1e10,
+                               bestEffort=True).getInfo()
+        p33, p66 = pct.get("elevation_p33"), pct.get("elevation_p66")
+        band = (ee.Image(0).where(dem.gte(p33), 1).where(dem.gte(p66), 2)
+                if p33 is not None and p66 is not None else ee.Image(0))
+        out["elev_breaks"] = [p33, p66]
+        # Llave combinada → un solo reduceRegion agrupado
+        key = (band.multiply(100).add(trend.multiply(10)).add(prio)
+               .updateMask(sen.mask()).toInt().rename("key"))
+        res = (ee.Image.pixelArea().divide(1e4).addBands(key)
+               .reduceRegion(reducer=ee.Reducer.sum().group(groupField=1,
+                                                            groupName="key"),
+                             geometry=geom, scale=scale, maxPixels=1e10,
+                             bestEffort=True, tileScale=8).getInfo())
+        cells = {int(g["key"]): float(g["sum"]) for g in res.get("groups", [])}
+        out["cells"] = cells
+        glob = (sen.addBands(mean).addBands(std)
+                .reduceRegion(ee.Reducer.median(), geom, scale=scale,
+                              maxPixels=1e10, bestEffort=True, tileScale=8)
+                .getInfo())
+        out["median_sen"] = glob.get("sen")
+        out["median_mean"] = glob.get("mean")
+        out["median_std"] = glob.get("std")
+        for name, img, sch in (("trend_img", trend, TREND_SCHEME),
+                               ("prio_img", prio, PRIORITY_SCHEME)):
+            url = img.visualize(min=0, max=len(sch["colors"]) - 1,
+                                palette=sch["colors"]).getThumbURL(
+                {"region": region, "dimensions": dimensions, "format": "png"})
+            r = requests.get(url, timeout=180)
+            if r.status_code == 200:
+                out[name] = mpimg.imread(io.BytesIO(r.content))
+            else:
+                out["errors"].append(f"{name}: HTTP {r.status_code}")
+    except Exception as e:
+        out["errors"].append(f"tendencia por píxel: {e}")
+        print(f"Tendencia NDVI por píxel falló: {e}")
+    return out
+
+
+def summarize_trend_cells(cells):
+    """
+    Agrega las celdas {banda*100 + tendencia*10 + prioridad: ha} en tablas:
+    por tendencia, por prioridad y por tercio altitudinal. Puro Python
+    (probado sin GEE).
+    """
+    tot = sum(cells.values())
+    if tot <= 0:
+        return None
+    nt, npr = len(TREND_SCHEME["labels"]), len(PRIORITY_SCHEME["labels"])
+    by_t = [0.0] * nt
+    by_p = [0.0] * npr
+    band_t = [[0.0] * nt for _ in BAND_LABELS]
+    band_p = [[0.0] * npr for _ in BAND_LABELS]
+    for k, ha in cells.items():
+        b, t, p = k // 100, (k // 10) % 10, k % 10
+        if not (0 <= b < 3 and 0 <= t < nt and 0 <= p < npr):
+            continue
+        by_t[t] += ha
+        by_p[p] += ha
+        band_t[b][t] += ha
+        band_p[b][p] += ha
+
+    def rows(vals, labels):
+        return [{"clase": l, "ha": round(v, 1), "pct": round(100 * v / tot, 1)}
+                for l, v in zip(labels, vals)]
+
+    def band_rows(mat, idx):
+        out = []
+        for b, lab in enumerate(BAND_LABELS):
+            bt = sum(mat[b])
+            sel = sum(mat[b][i] for i in idx)
+            out.append({"banda": lab, "ha": round(bt, 1),
+                        "sel_ha": round(sel, 1),
+                        "sel_pct": round(100 * sel / bt, 1) if bt else 0.0})
+        return out
+
+    decl = [0, 1]
+    incr = [3, 4]
+    crit = [0, 1]
+    res = {
+        "total_ha": round(tot, 1),
+        "trend": rows(by_t, TREND_SCHEME["labels"]),
+        "prio": rows(by_p, PRIORITY_SCHEME["labels"]),
+        "decl_pct": round(100 * sum(by_t[i] for i in decl) / tot, 1),
+        "incr_pct": round(100 * sum(by_t[i] for i in incr) / tot, 1),
+        "stab_pct": round(100 * by_t[2] / tot, 1),
+        "crit_pct": round(100 * sum(by_p[i] for i in crit) / tot, 1),
+        "cons_pct": round(100 * by_p[3] / tot, 1),
+        "band_decl": band_rows(band_t, decl),
+        "band_incr": band_rows(band_t, incr),
+        "band_crit": band_rows(band_p, crit),
+        "band_cons": band_rows(band_p, [3]),
+        # matrices [tercio][clase] en ha (para las tablas del informe)
+        "band_trend": [[round(v, 1) for v in row] for row in band_t],
+        "band_prio": [[round(v, 1) for v in row] for row in band_p],
+        "bands": BAND_LABELS,
+    }
+    nz = [r for r in res["band_decl"] if r["ha"] > 0]
+    res["band_max_decl"] = (max(nz, key=lambda r: r["sel_pct"])["banda"]
+                            if nz and max(r["sel_pct"] for r in nz) > 0 else None)
+    nz = [r for r in res["band_crit"] if r["ha"] > 0]
+    res["band_max_crit"] = (max(nz, key=lambda r: r["sel_pct"])["banda"]
+                            if nz and max(r["sel_pct"] for r in nz) > 0 else None)
+    nz = [r for r in res["band_cons"] if r["ha"] > 0]
+    res["band_max_cons"] = (max(nz, key=lambda r: r["sel_pct"])["banda"]
+                            if nz and max(r["sel_pct"] for r in nz) > 0 else None)
+    return res
+
+
 def mann_kendall_sen(years, values):
     """
     Tendencia monotónica: pendiente de Sen (unid./año) y prueba de

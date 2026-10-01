@@ -1,0 +1,150 @@
+{# ════════════════════════════════════════════════════════════════════════
+   8.8 Informe técnico del análisis interanual del NDVI
+   Todo el texto se construye con los datos de la corrida (results.hist,
+   results.trend). Si un dato falta, se declara como limitación; no se
+   inventan valores, ubicaciones ni resultados.
+   ════════════════════════════════════════════════════════════════════════ #}
+{% macro pv(p) %}{% if p < 0.001 %}p &lt; 0.001{% else %}p = {{ "%.3f"|format(p) }}{% endif %}{% endmacro %}
+{% set h = results.hist or {} %}
+{% set t = results.trend or {} %}
+{% set ts = t.summary if t and t.summary else none %}
+{% set st = h.ndvi_stats if h and h.ndvi_stats else none %}
+{% set tr = h.ndvi_trend if h and h.ndvi_trend else none %}
+{% set an = results.area_name if results.area_name else "la cuenca de aporte al punto de control (" ~ ("%.4f"|format(results.lat)) ~ ", " ~ ("%.4f"|format(results.lon)) ~ ")" %}
+{% set per = (h.first ~ "–" ~ h.last) if h and h.first else "sin serie disponible" %}
+{% set cr = h.class_rows if h and h.class_rows else [] %}
+{% set ep = h.epochs if h and h.epochs else [] %}
+{% if cr and ep|length >= 2 %}
+  {% set veg0 = cr[3].vals[0].pct + cr[4].vals[0].pct %}
+  {% set veg1 = cr[3].vals[-1].pct + cr[4].vals[-1].pct %}
+  {% set bare0 = cr[0].vals[0].pct + cr[1].vals[0].pct %}
+  {% set bare1 = cr[0].vals[-1].pct + cr[1].vals[-1].pct %}
+  {% set sparse1 = cr[2].vals[-1].pct %}
+{% else %}
+  {% set veg0 = none %}{% set veg1 = none %}{% set bare0 = none %}{% set bare1 = none %}{% set sparse1 = none %}
+{% endif %}
+
+<h2>8.8 Informe Técnico del Análisis Interanual del NDVI — {{ an }} ({{ per }})</h2>
+
+<h3>8.8.1 Introducción</h3>
+<p>El Índice de Vegetación de Diferencia Normalizada (NDVI) relaciona la reflectancia en el infrarrojo cercano, que la vegetación sana refleja con intensidad, con la reflectancia en el rojo, que la clorofila absorbe (Rouse et al., 1974). Sus valores van de −1 a +1: cerca de cero o negativos corresponden a agua, roca o suelo desnudo, y los valores altos a vegetación densa y vigorosa. Por su relación con la biomasa verde y la actividad fotosintética, el NDVI es un indicador estándar para el monitoreo ambiental de la cobertura vegetal.</p>
+<p>Una imagen aislada muestra el estado de la vegetación en un momento dado, pero no permite separar las condiciones propias del sitio de las de un año particular. El análisis interanual compara el mismo periodo estacional a lo largo de varios años. Así permite reconocer tendencias sostenidas de recuperación o de pérdida de cobertura, distinguirlas de la variabilidad climática y localizar los sectores donde la degradación aumenta la exposición a erosión, incendios y movimientos en masa.</p>
+
+<h3>8.8.2 Objetivo del análisis</h3>
+<p>El objetivo es evaluar la dinámica interanual del NDVI en {{ an }} durante {% if h and h.first %}el periodo {{ per }}{% else %}un periodo de 20 años{% endif %} y relacionarla con la conservación de la cobertura vegetal, el potencial de captura y conservación de carbono y la identificación de las áreas más vulnerables a incendios, erosión, deslizamientos y otros riesgos naturales, como base para priorizar acciones de manejo, restauración, conservación y monitoreo.</p>
+
+<h3>8.8.3 Metodología general</h3>
+<p>El análisis usó las imágenes de reflectancia de superficie Landsat Collection 2 Nivel 2 (TM 5, ETM+ 7, OLI 8 y OLI-2 9) procesadas en Google Earth Engine, con 30 m de resolución nativa. Para reducir el efecto de la fenología y de la nubosidad, se usó solo la estación seca (mayo a septiembre). Se enmascararon nubes, cirros y sombras con la banda de calidad QA_PIXEL, y las reflectancias de TM y ETM+ se ajustaron a la escala de OLI con los coeficientes de Roy et al. (2016) para que los valores sean comparables entre sensores. Para cada año se calculó la mediana de las escenas válidas y, sobre ella, el NDVI.</p>
+<p>La interpretación combina tres niveles de análisis. El primero es la comparación de las cinco épocas cada cinco años, clasificadas con cortes fijos (0.1, 0.2, 0.4 y 0.6) y cuantificadas en porcentaje y hectáreas dentro del parteaguas (sección 8.7). El segundo es la serie anual del NDVI medio de la cuenca, evaluada con la pendiente de Sen y la prueba de Mann-Kendall (α = 0.05). El tercero es la tendencia por píxel: la pendiente de Sen de las series anuales de NDVI{% if t.min_years %}, calculada solo en píxeles con al menos {{ t.min_years }} años válidos y excluyendo el agua{% endif %}. Con el NDVI medio, su desviación estándar interanual y la pendiente del terreno (SRTM, 30 m), los píxeles se agruparon en zonas de prioridad, y la cuenca se dividió en tercios altitudinales (baja, media y alta){% if t.elev_breaks and t.elev_breaks[0] is not none %} con límites en {{ "%.0f"|format(t.elev_breaks[0]) }} y {{ "%.0f"|format(t.elev_breaks[1]) }} m s.n.m.{% endif %} para ubicar los resultados. Las superficies se calcularon a una escala de {{ t.scale_m or 60 }} m.</p>
+<p>Los umbrales de tendencia (±0.002 y ±0.005 unidades de NDVI por año, equivalentes a ±0.04 y ±0.10 en 20 años), el de ladera ({{ t.steep_deg or 15 }}°) y el de variabilidad alta (desviación estándar ≥ {{ t.high_var or 0.08 }}) son criterios operativos definidos para este análisis, no valores normativos. El análisis <strong>no incorporó</strong> series de precipitación ni temperatura, datos de campo, inventarios forestales, registros de incendios ni inventarios de deslizamientos. Por eso las relaciones con carbono y riesgos son <strong>inferencias técnicas de susceptibilidad</strong> basadas en la cobertura vegetal, no evaluaciones de amenaza ni de riesgo en sentido estricto.</p>
+{% if not h.first and not ts %}
+<p><strong>Limitación:</strong> en esta corrida no se obtuvieron datos de NDVI interanual desde Google Earth Engine{% if h.errors or t.errors %} ({{ ((h.errors or []) + (t.errors or []))|join('; ') }}){% endif %}. Las secciones siguientes se presentan solo como marco de interpretación, sin resultados cuantitativos.</p>
+{% endif %}
+
+<h3>8.8.4 Resultados del análisis interanual del NDVI</h3>
+{% if st %}
+<p>Entre {{ h.first }} y {{ h.last }}, el NDVI medio de estación seca de la cuenca fue de {{ "%.3f"|format(st.mean) }}, con una desviación estándar interanual de {{ "%.3f"|format(st.sd) }}{% if st.cv is not none %} (coeficiente de variación de {{ st.cv }} %){% endif %}. El valor más alto se registró en {{ st.max_year }} ({{ "%.3f"|format(st.max) }}) y el más bajo en {{ st.min_year }} ({{ "%.3f"|format(st.min) }}).
+{% if tr %}La prueba de Mann-Kendall indica una serie <strong>{{ tr.tendencia }}</strong> ({{ pv(tr.p) }}, n = {{ tr.n }} años), con una pendiente de Sen de {{ "%+.4f"|format(tr.sen) }} unidades de NDVI por año, es decir, un cambio acumulado de {{ "%+.3f"|format(tr.sen * (h.last - h.first)) }} en el periodo.
+{% if tr.tendencia == 'decreciente' %}Esto indica una pérdida sostenida de vigor o de cobertura vegetal a escala de cuenca, que no se explica solo por la variabilidad entre años.
+{% elif tr.tendencia == 'creciente' %}Esto indica una ganancia sostenida de vigor o de cobertura vegetal a escala de cuenca, compatible con procesos de recuperación o con condiciones climáticas más favorables, que este análisis no permite separar.
+{% else %}A escala de cuenca no hay un cambio monotónico demostrable; las diferencias entre años se explican mejor por la variabilidad interanual, probablemente climática, que por una tendencia sostenida.{% endif %}
+{% else %}La serie no tiene suficientes años válidos para evaluar estadísticamente la tendencia.{% endif %}</p>
+{% endif %}
+{% if ts %}
+<p>A escala de píxel, {{ ts.decl_pct }} % de la superficie analizada ({{ "{:,.0f}".format(ts.total_ha) }} ha con datos suficientes) muestra <strong>disminución</strong> del NDVI. De ese total, {{ ts.trend[0].pct }} % corresponde a disminución fuerte y {{ ts.trend[1].pct }} % a disminución moderada. Un {{ ts.incr_pct }} % presenta <strong>incremento</strong> ({{ ts.trend[4].pct }} % fuerte y {{ ts.trend[3].pct }} % moderado), y el {{ ts.stab_pct }} % restante es <strong>estable</strong>.
+{% if ts.band_max_decl %}La disminución tiene mayor peso relativo en la {{ ts.band_max_decl|lower }}, donde alcanza el {{ (ts.band_decl|selectattr('banda','equalto',ts.band_max_decl)|first).sel_pct }} % de la superficie de ese tercio altitudinal.{% endif %}
+{% if t.median_std is not none %}La desviación estándar interanual mediana por píxel es de {{ "%.3f"|format(t.median_std) }}. Los sectores que superan {{ t.high_var }} tienen una <strong>variabilidad marcada</strong>, que puede reflejar cultivos de temporal, quemas recurrentes, cambios del cauce o una vegetación muy sensible al déficit hídrico.{% endif %}</p>
+{% endif %}
+{% if veg0 is not none %}
+<p>En la comparación por épocas, la vegetación moderada y densa (NDVI ≥ 0.4) pasó de {{ "%.1f"|format(veg0) }} % en {{ ep|first }} a {{ "%.1f"|format(veg1) }} % en {{ ep|last }} ({{ "%+.1f"|format(veg1 - veg0) }} puntos porcentuales). En el mismo intervalo, el agua, el suelo desnudo y la cobertura muy rala (NDVI &lt; 0.2) pasaron de {{ "%.1f"|format(bare0) }} % a {{ "%.1f"|format(bare1) }} % ({{ "%+.1f"|format(bare1 - bare0) }} p.p.).
+{% if veg1 - veg0 <= -2 and bare1 - bare0 >= 2 %}La reducción simultánea de la vegetación vigorosa y el aumento del suelo expuesto son el patrón esperado de la <strong>pérdida de cobertura, la degradación o la presión antrópica</strong> (desmonte, sobrepastoreo, expansión agrícola o quemas). Su atribución a una causa concreta requiere verificación en campo.
+{% elif veg1 - veg0 >= 2 and bare1 - bare0 <= -2 %}El aumento de la vegetación vigorosa a costa del suelo expuesto indica <strong>recuperación</strong> de la cobertura, por regeneración natural, abandono de cultivos, revegetación o condiciones climáticas favorables en las épocas recientes.
+{% else %}Los cambios en la composición por clases son moderados o no van en la misma dirección. Esto sugiere un mosaico en el que sectores en recuperación conviven con sectores en deterioro, sin un cambio neto dominante.{% endif %}
+Los mapas de épocas, la tabla de clases y la serie anual de la sección 8.7, junto con el mapa de tendencia por píxel (Figura 8.8-1), respaldan estos resultados.</p>
+{% endif %}
+{% if results.trend_map %}
+<figure class="apa-figure" style="page-break-inside:avoid;">
+  <img src="{{ results.trend_map }}" alt="Tendencia del NDVI por píxel y zonas de prioridad">
+  <figcaption><em>Figura 8.8-1.</em> Izquierda: pendiente de Sen del NDVI de estación seca {{ t.first }}–{{ t.last }}. Derecha: zonas de prioridad según la tendencia, el NDVI medio, la variabilidad interanual y la pendiente del terreno. Parteaguas en negro. Creador: www.frava.tech.</figcaption>
+</figure>
+{% endif %}
+{% if ts %}
+<table style="width:100%; font-size:8pt; page-break-inside:avoid;">
+  <thead><tr><th>Tendencia del NDVI (pendiente de Sen)</th><th style="text-align:right;">ha</th><th style="text-align:right;">%</th>
+    {% for b in ts.bands %}<th style="text-align:right;">{{ b }}<br><span style="font-weight:normal;">ha</span></th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in ts.trend %}{% set i = loop.index0 %}
+    <tr><td>{{ r.clase }}</td><td style="text-align:right;">{{ "{:,.0f}".format(r.ha) }}</td><td style="text-align:right;">{{ r.pct }}</td>
+      {% for row in ts.band_trend %}<td style="text-align:right;">{{ "{:,.0f}".format(row[i]) }}</td>{% endfor %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="no-indent" style="text-indent:0; font-size:7.5pt; color:#555;">Tercios altitudinales de la cuenca definidos por los percentiles 33 y 66 de la elevación SRTM dentro del parteaguas.</p>
+{% endif %}
+
+<h3>8.8.5 Interpretación de la cobertura vegetal</h3>
+<p>{% if veg1 is not none %}En la época más reciente ({{ ep|last }}), el {{ "%.1f"|format(veg1) }} % de la cuenca tiene vegetación moderada o densa (NDVI ≥ 0.4), el {{ "%.1f"|format(sparse1) }} % vegetación escasa (0.2 a 0.4) y el {{ "%.1f"|format(bare1) }} % suelo desnudo, roca, agua o cobertura muy rala (NDVI &lt; 0.2).
+{% if veg1 < 20 %}El predominio de la cobertura escasa o ausente corresponde a un paisaje de baja biomasa (pajonales, matorrales abiertos, cultivos o áreas áridas o de alta montaña), donde la protección del suelo depende de una cubierta delgada y fácil de perturbar.
+{% elif veg1 >= 50 %}La vegetación vigorosa ocupa la mayor parte de la cuenca y le da una protección superficial relevante, por lo que su conservación es prioritaria para mantener la regulación hídrica y la retención de suelo.
+{% else %}La cuenca combina sectores de vegetación vigorosa con amplias superficies de cobertura escasa, lo que configura un mosaico heterogéneo.{% endif %}
+{% else %}No se dispuso de la composición por clases para caracterizar la cobertura.{% endif %}
+{% if ts %}Los sectores con <strong>mejor estado de conservación</strong> son los que combinan un NDVI medio ≥ 0.4 con una tendencia estable o creciente: suman el {{ ts.cons_pct }} % de la superficie analizada{% if ts.band_max_cons %} y tienen su mayor proporción en la {{ ts.band_max_cons|lower }}{% endif %}. Los sectores con <strong>disminución persistente</strong> ({{ ts.decl_pct }} %) indican deterioro de la cobertura. Cuando aparecen como manchas dispersas en medio de vegetación estable, indican <strong>fragmentación</strong>. Donde la disminución lleva el NDVI por debajo de 0.2, el sector deja de cumplir funciones ecológicas como la intercepción de lluvia, la infiltración, la retención de suelo y el hábitat, lo que constituye una <strong>pérdida de funcionalidad ecológica</strong>.{% endif %}
+Como limitación, el NDVI pierde sensibilidad (se satura) por encima de aproximadamente 0.8 en coberturas muy densas y es influido por el brillo del suelo en coberturas ralas. Por eso no distingue entre tipos de vegetación ni reemplaza una clasificación de cobertura validada en campo.</p>
+
+<h3>8.8.6 Análisis respecto a bonos de carbono</h3>
+<p>El NDVI no mide biomasa ni carbono. Sin embargo, su nivel y su tendencia indican dónde se mantiene, se gana o se pierde la biomasa verde, que es la base del carbono aéreo.
+{% if ts %}Las áreas con NDVI ≥ 0.4 estable o creciente ({{ ts.cons_pct }} % de la superficie analizada, unas {{ "{:,.0f}".format(ts.prio[3].ha) }} ha) presentan las mejores condiciones para iniciativas de <strong>conservación</strong> de reservas de carbono, porque reúnen dos atributos que exigen los mecanismos de mercado: biomasa existente y permanencia demostrada a lo largo de {{ (t.last - t.first) if t.first else 20 }} años. Las áreas con incremento sostenido del NDVI ({{ ts.incr_pct }} %) pueden corresponder a captura activa por regeneración y serían candidatas para proyectos de <strong>restauración</strong> o reforestación, siempre que se compruebe en campo el origen del incremento. Las áreas con NDVI decreciente ({{ ts.decl_pct }} %) o con alta variabilidad muestran pérdida de biomasa o inestabilidad. Para un proyecto de carbono representan riesgo de no permanencia y de fugas, y solo serían elegibles como proyectos de reducción de la deforestación o la degradación si se identifican y controlan los factores de presión.
+{% else %}Sin la tendencia por píxel no es posible delimitar las áreas candidatas.{% endif %}
+{% if veg1 is not none and veg1 < 20 %}Dado el bajo porcentaje de vegetación vigorosa, el potencial de carbono aéreo de la cuenca es limitado. En paisajes de este tipo, el carbono orgánico del suelo y la restauración de pastizales y bofedales pueden ser más relevantes que la biomasa leñosa.{% endif %}
+Cualquier iniciativa de bonos de carbono requiere un inventario de biomasa en campo, una línea base y un escenario de referencia según una metodología reconocida por el estándar de certificación elegido, y la verificación de la tenencia de la tierra. El presente análisis solo sirve para la preselección de áreas y no para cuantificar toneladas de CO₂.</p>
+
+<h3>8.8.7 Análisis de erosión de cuencas</h3>
+<p>La cobertura vegetal intercepta la lluvia, protege el suelo del impacto de las gotas, aumenta la infiltración y frena la escorrentía. Su disminución eleva el factor de cobertura C de la ecuación universal de pérdida de suelo revisada (RUSLE), que relaciona la cobertura con la pérdida de suelo, y con él la erosión hídrica, el aporte de sedimentos y la sedimentación en los cauces. Esto se vincula directamente con el transporte de sedimentos evaluado en los capítulos 6 y 7.
+{% if ts %}En la cuenca, el {{ ts.decl_pct }} % de la superficie muestra disminución del NDVI y el {{ ts.prio[2].pct }} % corresponde a suelo expuesto (NDVI medio &lt; 0.2) en laderas de {{ t.steep_deg }}° o más. Estos son los sectores con mayor sensibilidad potencial a la erosión hídrica{% if ts.band_max_decl %}, con mayor peso relativo de la disminución en la {{ ts.band_max_decl|lower }}{% endif %}.
+{% if h.water_trend %}La superficie de agua en estiaje muestra una tendencia {{ h.water_trend.tendencia }} ({{ "%+.1f"|format(h.water_trend.sen) }} ha por año; {{ pv(h.water_trend.p) }}). Esta variable depende también de la precipitación y de la dinámica del cauce, por lo que no debe atribuirse solo a la cobertura.{% endif %}
+{% else %}No se dispone de la tendencia por píxel para localizar los sectores sensibles.{% endif %}
+La herramienta no subdividió la cuenca en subcuencas, de modo que los sectores sensibles se ubican por tercio altitudinal y por pendiente. Para delimitar subcuencas prioritarias se recomienda cruzar la Figura 8.8-1 con la red de drenaje.</p>
+
+<h3>8.8.8 Análisis de riesgo de incendios</h3>
+<p>La susceptibilidad a incendios aumenta cuando hay biomasa herbácea o arbustiva que se seca en la estación seca, cuando el vigor de la vegetación disminuye (más material muerto y combustible fino) y cuando las quemas se repiten, lo que mantiene una cobertura inestable. En Bolivia, la temporada de quemas e incendios coincide con el final de la estación seca.
+{% if sparse1 is not none %}En la época más reciente, el {{ "%.1f"|format(sparse1) }} % de la cuenca tiene vegetación escasa (NDVI 0.2 a 0.4) en estación seca, una condición típica de pajonales, matorrales y cultivos con combustible fino disponible.{% endif %}
+{% if ts %}Los sectores clasificados con prioridad alta ({{ ts.prio[1].pct }} %), que reúnen disminución del NDVI o alta variabilidad interanual, son los más compatibles con un régimen de quemas o con estrés hídrico recurrente. Sin embargo, la variabilidad también puede deberse a la rotación de cultivos.{% endif %}
+Este análisis no incorporó focos de calor ni cicatrices de quema. La relación con incendios es una posibilidad técnica que debe confirmarse con los registros de focos de calor (MODIS/VIIRS) y de áreas quemadas.</p>
+
+<h3>8.8.9 Análisis de riesgo de deslizamientos</h3>
+<p>La vegetación aporta cohesión mediante las raíces, reduce la saturación del suelo por evapotranspiración e intercepción y protege las laderas de la erosión. Su pérdida en terrenos inclinados reduce el factor de seguridad de las laderas y favorece los movimientos en masa superficiales.
+{% if ts %}El {{ ts.prio[0].pct }} % de la superficie analizada (unas {{ "{:,.0f}".format(ts.prio[0].ha) }} ha) combina disminución del NDVI con pendientes de {{ t.steep_deg }}° o más y se clasifica como de <strong>prioridad crítica</strong>{% if ts.band_max_crit %}. La mayor proporción relativa está en la {{ ts.band_max_crit|lower }}{% endif %}. Estos son los sectores con mayor susceptibilidad potencial a deslizamientos atribuible a la pérdida de cobertura.{% else %}No se dispone de la zonificación por pendiente y tendencia.{% endif %}
+La susceptibilidad real depende también de la litología, el espesor del suelo, la precipitación intensa, la sismicidad y los cortes de caminos, factores que no se evaluaron. El resultado debe tomarse como insumo para un estudio de susceptibilidad y no como un mapa de amenaza por deslizamientos.</p>
+
+<h3>8.8.10 Análisis de erosión y degradación del suelo</h3>
+<p>La disminución del NDVI suele reflejar una mayor exposición del suelo: menor cobertura viva y de hojarasca, más impacto directo de la lluvia, formación de costras, menos infiltración y pérdida progresiva del horizonte orgánico. Cuando persiste varios años, indica degradación del suelo y no solo una pérdida temporal de vigor.
+{% if veg0 is not none %}El cambio de {{ "%+.1f"|format(bare1 - bare0) }} p.p. en la superficie con NDVI &lt; 0.2 entre {{ ep|first }} y {{ ep|last }} {% if bare1 - bare0 >= 2 %}indica una ampliación del suelo expuesto{% elif bare1 - bare0 <= -2 %}indica una reducción del suelo expuesto{% else %}no indica un cambio neto significativo del suelo expuesto{% endif %} a escala de cuenca.{% endif %}
+{% if ts %}Las zonas más críticas son las de prioridad crítica ({{ ts.prio[0].pct }} %) y media ({{ ts.prio[2].pct }} %), donde el suelo expuesto o en pérdida de cobertura coincide con pendientes pronunciadas.{% endif %}
+Sin muestreo de suelos ni parcelas de erosión, esta interpretación indica dónde se espera mayor degradación, pero no mide su magnitud.</p>
+
+<h3>8.8.11 Identificación de zonas más vulnerables y amenazadas</h3>
+<p>En esta sección se entiende por <strong>zona vulnerable</strong> la que, por su condición actual (cobertura escasa en ladera), es más frágil ante lluvias intensas, fuego o perturbaciones. Se entiende por <strong>zona amenazada</strong> la que muestra un proceso activo de deterioro (disminución persistente o alta variabilidad del NDVI) que reduce su capacidad de protección con el tiempo.
+{% if ts %}Con estos criterios, las zonas <strong>más amenazadas</strong> son las de prioridad crítica ({{ ts.prio[0].pct }} %, {{ "{:,.0f}".format(ts.prio[0].ha) }} ha) y alta ({{ ts.prio[1].pct }} %, {{ "{:,.0f}".format(ts.prio[1].ha) }} ha). Las <strong>más vulnerables</strong> son las de prioridad crítica y media ({{ ts.prio[2].pct }} %, {{ "{:,.0f}".format(ts.prio[2].ha) }} ha). La prioridad crítica, que es a la vez vulnerable y amenazada, debe atenderse primero.{% if ts.band_max_crit %} Altitudinalmente, la concentración relativa de la prioridad crítica es mayor en la {{ ts.band_max_crit|lower }}.{% endif %}{% else %}No fue posible zonificar la vulnerabilidad por falta de la tendencia por píxel.{% endif %}</p>
+{% if ts %}
+<table style="width:100%; font-size:8pt; page-break-inside:avoid;">
+  <thead><tr><th>Zona de prioridad</th><th style="text-align:right;">ha</th><th style="text-align:right;">%</th>
+    {% for b in ts.bands %}<th style="text-align:right;">{{ b }}<br><span style="font-weight:normal;">ha</span></th>{% endfor %}</tr></thead>
+  <tbody>
+  {% for r in ts.prio %}{% set i = loop.index0 %}
+    <tr><td>{{ r.clase }}</td><td style="text-align:right;">{{ "{:,.0f}".format(r.ha) }}</td><td style="text-align:right;">{{ r.pct }}</td>
+      {% for row in ts.band_prio %}<td style="text-align:right;">{{ "{:,.0f}".format(row[i]) }}</td>{% endfor %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h3>8.8.12 Conclusiones</h3>
+<p>{% if tr %}Durante {{ per }}, el NDVI de estación seca de {{ an }} presentó un comportamiento <strong>{{ tr.tendencia }}</strong> a escala de cuenca (Sen = {{ "%+.4f"|format(tr.sen) }} por año; {{ pv(tr.p) }}){% if st %}, con un valor medio de {{ "%.3f"|format(st.mean) }}{% if st.cv is not none %} y un coeficiente de variación interanual de {{ st.cv }} %{% endif %}{% endif %}.{% else %}No fue posible determinar estadísticamente la tendencia interanual del NDVI a escala de cuenca.{% endif %}
+{% if ts %}A escala de píxel, el {{ ts.decl_pct }} % de la superficie tiene disminución, el {{ ts.stab_pct }} % es estable y el {{ ts.incr_pct }} % muestra incremento.{% endif %}
+{% if veg1 is not none %}La vegetación moderada y densa ocupa el {{ "%.1f"|format(veg1) }} % de la cuenca en {{ ep|last }} ({{ "%+.1f"|format(veg1 - veg0) }} p.p. respecto de {{ ep|first }}).{% endif %}</p>
+<p>{% if ts %}Para fines de carbono, unas {{ "{:,.0f}".format(ts.prio[3].ha) }} ha ({{ ts.cons_pct }} %) reúnen condiciones de biomasa y permanencia para la preselección de iniciativas de conservación, mientras que las áreas en disminución constituyen un riesgo de pérdida de biomasa y de no permanencia. En cuanto a riesgos, la prioridad crítica ({{ ts.prio[0].pct }} %), donde la pérdida de cobertura coincide con laderas de {{ t.steep_deg }}° o más, concentra la mayor susceptibilidad combinada a erosión hídrica, aporte de sedimentos y deslizamientos superficiales, y la prioridad alta ({{ ts.prio[1].pct }} %) agrupa los sectores más compatibles con quemas recurrentes o estrés hídrico.{% else %}Sin la zonificación por píxel, las implicaciones para el carbono y los riesgos solo pueden plantearse de forma general.{% endif %}
+Estas conclusiones se basan en la cobertura vegetal detectada por satélite y deben validarse en campo antes de usarse en decisiones de inversión o regulatorias.</p>
+
+<h3>8.8.13 Recomendaciones</h3>
+<p>Se recomienda dirigir las acciones de <strong>restauración</strong> (revegetación con especies nativas, cercado para regeneración natural, obras de conservación de suelos como zanjas de infiltración, terrazas y barreras vivas, y control de cárcavas) primero a las zonas de prioridad crítica y luego a las de prioridad media, porque son las que más reducen el aporte de sedimentos a los cauces y a la infraestructura evaluada en este informe. En las zonas de conservación conviene asegurar la permanencia de la cobertura mediante instrumentos de gestión territorial, como planes de uso del suelo y áreas de protección de fuentes de agua, y evaluar su elegibilidad para mecanismos de carbono o de pago por servicios ambientales con un inventario de biomasa y la verificación de la tenencia.</p>
+<p>Para la <strong>reducción de riesgos</strong>, se recomienda incorporar la zonificación de la Figura 8.8-1 a los planes municipales de gestión de riesgos, cruzarla con la geología, la red vial y los registros históricos de deslizamientos, y complementar el análisis con focos de calor y áreas quemadas (MODIS/VIIRS) para confirmar la relación con incendios. Para el <strong>monitoreo</strong>, conviene repetir este análisis cada año al cierre de la estación seca, incorporar series de precipitación (SENAMHI o CHIRPS) para separar los efectos climáticos de los antrópicos y establecer puntos de control en campo en sectores representativos de cada zona de prioridad. Por último, para fortalecer las estrategias de captura de carbono, se recomienda complementar el NDVI con índices menos sensibles al suelo (SAVI o EVI) y con información de estructura de la vegetación, y priorizar la restauración en sectores contiguos a áreas conservadas para reducir la fragmentación.</p>

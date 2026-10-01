@@ -881,8 +881,8 @@ table tfoot td {
       <tr><td><strong>Morf02</strong> — Red Hidrográfica</td><td>HydroSHEDS + SRTM</td><td class="td-num">30 m</td><td>Drenaje acumulado ≥ 1 000 celdas; caudal acumulado normalizado</td></tr>
       <tr><td><strong>Morf03</strong> — Pendiente del Lecho</td><td>SRTM ee.Terrain</td><td class="td-num">30 m</td><td>Pendiente en m/m (S = tan α); estadísticas zonales en buffer 2 km</td></tr>
       <tr><td><strong>Morf04</strong> — Cobertura ESA WorldCover</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Clasificación de 11 clases de uso del suelo; Manning's n asociado</td></tr>
-      <tr><td><strong>Morf05</strong> — NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Vegetación de Diferencia Normalizada (B8–B4)/(B8+B4); mediana 2020–2023</td></tr>
-      <tr><td><strong>Morf06</strong> — NDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Agua de Diferencia Normalizada (B3–B8)/(B3+B8); cuerpos de agua &gt; 0</td></tr>
+      <tr><td><strong>Morf05</strong> — NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Vegetación de Diferencia Normalizada (B8–B4)/(B8+B4); mediana de estación seca 2022–2024 (Cloud Score+). Serie interanual 20 años con Landsat armonizado (secciones 8.7 y 8.8)</td></tr>
+      <tr><td><strong>Morf06</strong> — MNDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10–20 m</td><td>Índice de Agua de Diferencia Normalizada Modificado (B3–B11)/(B3+B11) (Xu 2006); agua &gt; 0</td></tr>
       <tr><td><strong>Morf07</strong> — Turbidez (FNU)</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Turbidez Nechad/Dogliotti en FNU≈NTU; enmascarada a agua; validar con HYBAM</td></tr>
       <tr><td><strong>Morf08</strong> — Manning's n</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Coeficiente de rugosidad de Manning reclasificado por tipo de cobertura</td></tr>
       <tr><td><strong>Morf09</strong> — Número de Curva CN</td><td>ESA WorldCover + SRTM</td><td class="td-num">10 m</td><td>Curva Número SCS-CN para cálculo de escorrentía directa (AMC II)</td></tr>
@@ -919,6 +919,7 @@ table tfoot td {
   {% if results.hist or results.ndvi_multi %}
 {% include "_historico.html" %}
 {% endif %}
+{% include "_ndvi_informe.html" %}
 
   <!-- CAPÍTULO 9 -->
   <h1>9. Impactos sobre Infraestructura</h1>
@@ -1027,7 +1028,7 @@ table tfoot td {
     🗺️ Ver Mapas
   </a>
   <a class="btn-action btn-pdf"
-     href="/report/pdf?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}&rho_s={{ results.rho_s }}&depth={{ results.depth }}&velocity={{ results.velocity }}&temp={{ results.temp }}&slope={{ results.slope }}">
+     href="/report/pdf?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}&rho_s={{ results.rho_s }}&depth={{ results.depth }}&velocity={{ results.velocity }}&temp={{ results.temp }}&slope={{ results.slope }}{% if results.area_name %}&area={{ results.area_name|urlencode }}{% endif %}">
     📄 Descargar PDF
   </a>
   <button class="btn-action btn-print" onclick="window.print()">

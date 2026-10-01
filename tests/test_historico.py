@@ -37,3 +37,28 @@ def test_mann_kendall_no_trend_and_short_series():
     assert mann_kendall_sen([2020, 2021, 2022], [1, 2, 3]) is None
     # años faltantes (None) se ignoran
     assert mann_kendall_sen(yrs, [None] * 15 + vals[:5]) is None
+
+
+def test_summarize_trend_cells_aggregates_by_band_trend_priority():
+    from utils.gee_handler import summarize_trend_cells
+    # banda*100 + tendencia*10 + prioridad -> ha
+    cells = {0 * 100 + 0 * 10 + 0: 30.0,   # baja, disminución fuerte, crítica
+             2 * 100 + 1 * 10 + 1: 20.0,   # alta, disminución, alta
+             1 * 100 + 2 * 10 + 4: 40.0,   # media, estable, baja
+             2 * 100 + 4 * 10 + 3: 10.0}   # alta, incremento fuerte, conservación
+    r = summarize_trend_cells(cells)
+    assert r["total_ha"] == 100.0
+    assert r["decl_pct"] == 50.0 and r["stab_pct"] == 40.0 and r["incr_pct"] == 10.0
+    assert r["crit_pct"] == 50.0 and r["cons_pct"] == 10.0
+    assert r["band_trend"][0][0] == 30.0 and r["band_prio"][2][3] == 10.0
+    assert r["band_max_decl"] == "Cuenca baja"
+    assert summarize_trend_cells({}) is None
+
+
+def test_ndvi_report_section_renders_without_data():
+    import app
+    with app.app.test_request_context():
+        html = app.app.jinja_env.get_template("_ndvi_informe.html").render(
+            results={"lat": -17.4, "lon": -66.1, "area_name": ""})
+    assert "8.8.13 Recomendaciones" in html
+    assert "no se obtuvieron datos de NDVI interanual" in html
