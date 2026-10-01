@@ -62,3 +62,29 @@ def test_ndvi_report_section_renders_without_data():
             results={"lat": -17.4, "lon": -66.1, "area_name": ""})
     assert "8.8.13 Recomendaciones" in html
     assert "no se obtuvieron datos de NDVI interanual" in html
+
+
+def test_risk_class_schemes_consistent():
+    from utils.gee_handler import CLASS_SCHEMES, LAYER_META, RISK_LAYERS
+    for mt in RISK_LAYERS:
+        sch = CLASS_SCHEMES[mt]
+        assert len(sch["labels"]) == len(sch["breaks"]) + 1 == len(sch["colors"])
+        assert sch["breaks"] == sorted(sch["breaks"])
+        assert mt in LAYER_META
+
+
+def test_rusle_classes_match_model():
+    from models.rusle import clase_severidad
+    from utils.gee_handler import CLASS_SCHEMES
+    labels = CLASS_SCHEMES["erosion"]["labels"]
+    for i, a in enumerate([2, 7, 15, 30, 60, 120]):
+        assert labels[i].startswith(clase_severidad(a)[0])
+
+
+def test_risk_section_renders_without_maps():
+    import app
+    with app.app.test_request_context():
+        html = app.app.jinja_env.get_template("_riesgos.html").render(
+            results={"map_titles": app.MAP_TITLES})
+    assert "8.9.4 Susceptibilidad a inundación" in html
+    assert "No se obtuvieron superficies por clase" in html

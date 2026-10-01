@@ -520,6 +520,34 @@ LAYER_META = {
         "title": "Frecuencia de Inundación — JRC Global Surface Water",
         "legend": "Frecuencia de inundación (%)",
     },
+    "erosion": {
+        "vmin": 0, "vmax": 80,
+        "palette": ["#1a9850", "#a6d96a", "#fee08b", "#fdae61", "#f46d43", "#d73027"],
+        "source": "RUSLE A = R·K·LS·C·P — CHIRPS 2006–2025 (R, Hurni 1985) · OpenLandMap textura (K) · SRTM + MERIT Hydro (LS, Moore & Burch 1986) · Sentinel-2 NDVI estación seca (C, van der Knijff) · ESA WorldCover (P)",
+        "title": "Susceptibilidad a Erosión Hídrica — Pérdida de Suelo RUSLE",
+        "legend": "Pérdida de suelo (t/ha/año)",
+    },
+    "landslide": {
+        "vmin": 0, "vmax": 1,
+        "palette": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "source": "Índice multicriterio — pendiente SRTM (condicionante) × [cobertura NDVI Sentinel-2 0.4 · uso del suelo ESA WorldCover 0.3 · precipitación CHIRPS 0.3]",
+        "title": "Susceptibilidad a Deslizamientos (índice multicriterio)",
+        "legend": "Índice de susceptibilidad (0–1)",
+    },
+    "fire": {
+        "vmin": 0, "vmax": 1,
+        "palette": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "source": "Índice multicriterio — combustible (ESA WorldCover × NDVI Sentinel-2 estación seca) × [recurrencia de quemas MODIS MCD64A1 2001–2025 0.5 · pendiente SRTM 0.3 · orientación 0.2]",
+        "title": "Susceptibilidad a Incendios Forestales (índice multicriterio)",
+        "legend": "Índice de susceptibilidad (0–1)",
+    },
+    "flood": {
+        "vmin": -30, "vmax": 0,
+        "palette": ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+        "source": "MERIT Hydro HAND (altura sobre el drenaje más cercano, 90 m) + JRC Global Surface Water (ocurrencia ≥ 50 %)",
+        "title": "Susceptibilidad a Inundación — HAND (MERIT Hydro)",
+        "legend": "−HAND (m)",
+    },
     "watershed": {
         "vmin": 0, "vmax": 1,
         "palette": ["#cce5ff", "#4a90d9", "#003399"],
@@ -584,7 +612,160 @@ def _layer_image(map_type, region, radius_km=15.0, mode="cloudscore"):
         return (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
                 .select("occurrence").clip(region))
 
+    if map_type in RISK_LAYERS:
+        return _risk_image(map_type, region, radius_km, mode).clip(region)
+
     raise ValueError(f"Capa desconocida: {map_type}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MAPAS DE RIESGO (susceptibilidad) — erosión, deslizamientos, incendios,
+# inundación. Índices de SUSCEPTIBILIDAD a partir de factores condicionantes;
+# no son mapas de amenaza con probabilidad ni de riesgo con vulnerabilidad.
+# ════════════════════════════════════════════════════════════════════════════
+RISK_LAYERS = ("erosion", "landslide", "fire", "flood")
+_RISK_NDVI = {"erosion", "landslide", "fire"}
+RISK_PERIOD = ("2006-01-01", "2026-01-01")   # 20 años de precipitación
+
+
+def _precip_annual(period=RISK_PERIOD):
+    """Precipitación media anual (mm) CHIRPS, a partir de pentadas."""
+    n_years = int(period[1][:4]) - int(period[0][:4])
+    return (ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD")
+            .filterDate(period[0], period[1]).select("precipitation")
+            .sum().divide(n_years).rename("p"))
+
+
+def _risk_ndvi(region, radius_km, mode):
+    if radius_km > _LARGE_WINDOW_KM:
+        return _modis_index(region, "ndvi")
+    return _s2_index(region, "ndvi", mode=mode)
+
+
+def _worldcover():
+    return ee.Image("ESA/WorldCover/v100/2020").select("Map")
+
+
+_WC = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+
+
+def rusle_image(region, radius_km=15.0, mode="cloudscore"):
+    """Pérdida de suelo RUSLE por píxel (t/ha/año), mismas fórmulas que
+    models.rusle (R Hurni, K por textura USDA, S McCool → LS Moore & Burch,
+    C van der Knijff, P por cultivo y pendiente)."""
+    dem = ee.Image("USGS/SRTMGL1_003")
+    slope_deg = ee.Terrain.slope(dem)
+    beta = slope_deg.multiply(math.pi / 180)
+    # R
+    R = _precip_annual().multiply(0.562).subtract(8.12).max(0)
+    # K (OpenLandMap clase textural USDA 1..12 → K, ver models.rusle)
+    K = (ee.Image("OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02").select("b0")
+         .remap(list(range(1, 13)),
+                [0.0288, 0.0341, 0.0360, 0.0394, 0.0423, 0.0264,
+                 0.0394, 0.0499, 0.0500, 0.0450, 0.0170, 0.0053]))
+    # LS (Moore & Burch 1986) con área de aporte específica de MERIT Hydro,
+    # acotada a 300 m (longitud de ladera; en cauces el proceso ya no es
+    # erosión laminar/en surcos).
+    upa = ee.Image("MERIT/Hydro/v1_0_1").select("upa")          # km²
+    As = upa.multiply(1e6).divide(ee.Image.pixelArea().sqrt()).min(300)
+    LS = (As.divide(22.13).pow(0.4)
+          .multiply(beta.sin().divide(0.0896).pow(1.3)))
+    # C (van der Knijff): exp(−2·NDVI/(1−NDVI)), en [0, 1]
+    nd = _risk_ndvi(region, radius_km, mode).min(0.95)
+    C = nd.multiply(-2).divide(nd.multiply(-1).add(1)).exp().clamp(0, 1)
+    # P: 1 salvo cultivo (WorldCover 40), según pendiente
+    sp = beta.tan().multiply(100)
+    p_crop = (ee.Image(0.9).where(sp.lt(20), 0.8).where(sp.lt(16), 0.7)
+              .where(sp.lt(12), 0.6).where(sp.lt(8), 0.5).where(sp.lt(2), 0.6))
+    lc = _worldcover()
+    P = ee.Image(1).where(lc.eq(40), p_crop)
+    A = R.multiply(K).multiply(LS).multiply(C).multiply(P)
+    water = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence")
+             .unmask(0).gte(50)).Or(lc.eq(80))
+    return A.updateMask(water.Not()).rename("A")
+
+
+def rusle_basin_stats(lat, lon, radius_km, boundary_lonlat=None):
+    """Pérdida de suelo media de la cuenca (t/ha/año), mediana y total anual
+    (t/año) con el mismo modo de composite del mapa. None si no hay datos."""
+    if not _GEE_READY:
+        return None
+    mode = _LAST_MODE.get("erosion") or "cloudscore"
+    try:
+        region = _build_region(lat, lon, radius_km)
+        geom = (ee.Geometry.Polygon([boundary_lonlat])
+                if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+        A = rusle_image(region, radius_km, mode)
+        st = A.reduceRegion(
+            reducer=ee.Reducer.mean().combine(ee.Reducer.median(), sharedInputs=True)
+            .combine(ee.Reducer.count(), sharedInputs=True),
+            geometry=geom, scale=90, maxPixels=1e10, bestEffort=True,
+            tileScale=8).getInfo()
+        mean = st.get("A_mean")
+        if mean is None:
+            return None
+        area_ha = geom.area(maxError=10).divide(1e4).getInfo()
+        return {"mean": round(mean, 2), "median": round(st.get("A_median") or 0, 2),
+                "area_ha": round(area_ha, 1),
+                "total_t": round(mean * area_ha, 0), "mode": mode}
+    except Exception as e:
+        print(f"RUSLE de cuenca falló: {e}")
+        return None
+
+
+def _risk_image(map_type, region, radius_km, mode):
+    dem = ee.Image("USGS/SRTMGL1_003")
+    slope = ee.Terrain.slope(dem)
+    lc = _worldcover()
+    if map_type == "erosion":
+        return rusle_image(region, radius_km, mode)
+
+    if map_type == "flood":
+        hnd = ee.Image("MERIT/Hydro/v1_0_1").select("hnd")
+        occ = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence")
+               .unmask(0))
+        return hnd.multiply(-1).where(occ.gte(50), 0).rename("flood")
+
+    nd = _risk_ndvi(region, radius_km, mode)
+    if map_type == "landslide":
+        f_s = (ee.Image(0).where(slope.gte(5), 0.25).where(slope.gte(15), 0.5)
+               .where(slope.gte(25), 0.8).where(slope.gte(35), 1.0))
+        f_v = nd.subtract(0.1).divide(0.6).clamp(0, 1).multiply(-1).add(1)
+        f_lc = lc.remap(_WC, [0.2, 0.5, 0.7, 0.8, 0.6, 0.9, 0, 0, 0.3, 0.2, 0.6])
+        f_p = _precip_annual().subtract(300).divide(1200).clamp(0, 1)
+        idx = f_s.multiply(
+            f_v.multiply(0.4).add(f_lc.multiply(0.3)).add(f_p.multiply(0.3))
+            .multiply(0.5).add(0.5))
+        return idx.updateMask(lc.neq(70).And(lc.neq(80))).rename("landslide")
+
+    if map_type == "fire":
+        f_lc = lc.remap(_WC, [0.7, 1.0, 1.0, 0.7, 0.1, 0, 0, 0, 0.3, 0.4, 0.4])
+        f_v = (ee.Image(1).where(nd.gt(0.5),
+                                 nd.subtract(0.5).divide(0.3).multiply(-0.6).add(1))
+               .where(nd.lt(0.1), 0).clamp(0, 1).updateMask(nd.mask()))
+        last = int(RISK_PERIOD[1][:4]) - 1
+
+        def burned(y):
+            y = ee.Number(y)
+            d0 = ee.Date.fromYMD(y, 1, 1)
+            return (ee.ImageCollection("MODIS/061/MCD64A1")
+                    .filterDate(d0, d0.advance(1, "year")).select("BurnDate")
+                    .max().gt(0).unmask(0).rename("b"))
+        n_burn = ee.ImageCollection(ee.List.sequence(2001, last).map(burned)).sum()
+        f_b = n_burn.divide(3).clamp(0, 1)
+        f_s = slope.divide(35).clamp(0, 1)
+        asp = ee.Terrain.aspect(dem).multiply(math.pi / 180)
+        # Hemisferio sur: laderas orientadas al norte reciben más radiación
+        north = asp.cos().add(1).divide(2)
+        lat_c = region.centroid(1).coordinates().get(1)
+        f_a = ee.Image(ee.Algorithms.If(ee.Number(lat_c).lt(0), north,
+                                        north.multiply(-1).add(1)))
+        idx = f_lc.multiply(f_v).multiply(
+            f_b.multiply(0.5).add(f_s.multiply(0.3)).add(f_a.multiply(0.2))
+            .multiply(0.7).add(0.3))
+        return idx.rename("fire")
+
+    raise ValueError(f"Capa de riesgo desconocida: {map_type}")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -995,6 +1176,35 @@ CLASS_SCHEMES = {
         "ref": "Cortes propuestos: 10 FNU (detección NDTI, IWA WQRJ 60(4)); "
                "250 FNU (saturación banda roja, Dogliotti et al. 2015)",
     },
+    "erosion": {   # mismas clases que models.rusle.clase_severidad
+        "breaks": [5.0, 10.0, 20.0, 40.0, 80.0],
+        "labels": ["Ligera (< 5 t/ha/año)", "Moderada (5 – 10)", "Alta (10 – 20)",
+                   "Muy alta (20 – 40)", "Severa (40 – 80)", "Crítica (> 80)"],
+        "colors": ["#1a9850", "#a6d96a", "#fee08b", "#fdae61", "#f46d43", "#d73027"],
+        "ref": "RUSLE (Renard et al. 1997); clases de severidad del modelo RUSLE del software",
+    },
+    "landslide": {
+        "breaks": [0.2, 0.4, 0.6, 0.8],
+        "labels": ["Muy baja (< 0.2)", "Baja (0.2 – 0.4)", "Media (0.4 – 0.6)",
+                   "Alta (0.6 – 0.8)", "Muy alta (> 0.8)"],
+        "colors": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "ref": "Índice heurístico multicriterio; cortes por quintiles del rango 0–1 (criterio operativo)",
+    },
+    "fire": {
+        "breaks": [0.2, 0.4, 0.6, 0.8],
+        "labels": ["Muy baja (< 0.2)", "Baja (0.2 – 0.4)", "Media (0.4 – 0.6)",
+                   "Alta (0.6 – 0.8)", "Muy alta (> 0.8)"],
+        "colors": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "ref": "Índice heurístico multicriterio con recurrencia de quemas MODIS MCD64A1; cortes operativos",
+    },
+    "flood": {   # sobre −HAND: clase = nº de cortes superados
+        "breaks": [-15.0, -6.0, -3.0, -1.0],
+        "labels": ["Muy baja (HAND > 15 m)", "Baja (HAND 6 – 15 m)",
+                   "Media (HAND 3 – 6 m)", "Alta (HAND 1 – 3 m)",
+                   "Muy alta (HAND < 1 m o agua JRC ≥ 50 %)"],
+        "colors": ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+        "ref": "HAND de MERIT Hydro (Yamazaki et al. 2019; Nobre et al. 2011); umbrales operativos",
+    },
 }
 
 # Último error por capa (para mostrarlo, nunca ocultarlo), modo de composite
@@ -1028,7 +1238,8 @@ def _classify(img, breaks):
 
 
 def _modes_for(map_type):
-    return COMPOSITE_MODES if map_type in _INDEX_LAYERS else ("cloudscore",)
+    return (COMPOSITE_MODES if map_type in _INDEX_LAYERS or map_type in _RISK_NDVI
+            else ("cloudscore",))
 
 
 def _is_classified(map_type, radius_km):
@@ -1096,7 +1307,7 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
     region = _build_region(lat, lon, radius_km)
     meta = LAYER_META[map_type]
     classified = _is_classified(map_type, radius_km)
-    if map_type in _INDEX_LAYERS:
+    if map_type in _INDEX_LAYERS or map_type in _RISK_NDVI:
         dimensions = min(dimensions, 768)
     errors = []
     for mode in _modes_for(map_type):

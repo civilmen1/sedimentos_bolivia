@@ -60,6 +60,7 @@ from utils.gee_handler import (
     fetch_ndvi_trend,
     summarize_trend_cells,
     TREND_SCHEME,
+    rusle_basin_stats,
     PRIORITY_SCHEME,
     HIST_YEARS,
     CLASS_SCHEMES
@@ -72,7 +73,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v45-informe-ndvi"
+APP_VERSION = "v46-mapas-riesgo"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -396,6 +397,10 @@ MAP_SOURCES = {
     'manning':  "ESA WorldCover 2021 — 10 m  |  Reclasificación Manning's n",
     'risk':     "Multi-fuente GEE (SRTM + JRC + CN) — 30 m",
     'jrc':      "JRC Global Surface Water 1984–2021 / Landsat — 30 m",
+    'erosion':  "RUSLE — CHIRPS · OpenLandMap · SRTM · MERIT Hydro · Sentinel-2 · WorldCover",
+    'landslide': "Multicriterio — SRTM · Sentinel-2 · WorldCover · CHIRPS",
+    'fire':     "Multicriterio — WorldCover · Sentinel-2 · MODIS MCD64A1 · SRTM",
+    'flood':    "MERIT Hydro HAND + JRC Global Surface Water",
 }
 
 MAP_CMAPS = {
@@ -407,6 +412,10 @@ MAP_CMAPS = {
     'manning': 'PuBuGn',
     'risk':    'RdYlGn_r',
     'jrc':     'Blues',
+    'erosion': 'RdYlGn_r',
+    'landslide': 'YlOrRd',
+    'fire':    'YlOrRd',
+    'flood':   'Blues',
 }
 
 MAP_TITLES = {
@@ -419,7 +428,14 @@ MAP_TITLES = {
     'manning': "Coeficiente de Manning (n) — ESA WorldCover",
     'risk':    "Índice Compuesto de Riesgo Hidrosedimentológico",
     'jrc':     "Frecuencia de Inundación — JRC Global Surface Water",
+    'erosion': "Susceptibilidad a Erosión Hídrica — Pérdida de Suelo RUSLE",
+    'landslide': "Susceptibilidad a Deslizamientos",
+    'fire':    "Susceptibilidad a Incendios Forestales",
+    'flood':   "Susceptibilidad a Inundación — HAND",
 }
+
+# Mapas de riesgo (sección 8.9 del informe)
+RISK_ORDER = ['erosion', 'landslide', 'fire', 'flood']
 
 MAP_LEGEND_LABELS = {
     'watershed': "Elevación (m s.n.m.)",
@@ -431,6 +447,10 @@ MAP_LEGEND_LABELS = {
     'manning': "n de Manning",
     'risk':    "Índice de Riesgo (0–1)",
     'jrc':     "Frecuencia de inundación (%)",
+    'erosion': "Pérdida de suelo (t/ha/año)",
+    'landslide': "Índice de susceptibilidad (0–1)",
+    'fire':    "Índice de susceptibilidad (0–1)",
+    'flood':   "−HAND (m)",
 }
 
 
@@ -2148,6 +2168,10 @@ def generate_all_thematic_maps(lat, lon, radius_km=15.0):
             areas = compute_class_areas(mt, clat, clon, R, boundary)
             if areas:
                 _MAP_AREAS[mt] = areas
+    if _MAP_STATUS.get("erosion", {}).get("real"):
+        st = rusle_basin_stats(clat, clon, R, boundary)
+        if st:
+            _MULTI["rusle"] = st
     if gee_ready():
         try:
             hist = fetch_ndvi_history(clat, clon, R, boundary)
@@ -2204,6 +2228,21 @@ _DATA_SOURCES = {
     "jrc": ("Frecuencia de inundación", "JRC Global Surface Water 1.4",
             "JRC/GSW1_4/GlobalSurfaceWater", "30 m", "1984–2021", "JRC/Comisión Europea",
             "Serie Landsat; subestima cauces angostos"),
+    "erosion": ("Pérdida de suelo RUSLE", "CHIRPS · OpenLandMap · SRTM · MERIT Hydro · Sentinel-2 · WorldCover",
+                "UCSB-CHG/CHIRPS/PENTAD · OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02 · MERIT/Hydro/v1_0_1",
+                "30–5 500 m (R a ~5.5 km, K a 250 m)", "R 2006–2025; C may–sep 2022–2024",
+                "UCSB/CHG; OpenGeoHub; NASA; ESA", "Erosión potencial en ladera; sin calibrar con parcelas ni aforos de sedimento"),
+    "landslide": ("Susceptibilidad a deslizamientos", "Índice multicriterio heurístico",
+                  "USGS/SRTMGL1_003 · COPERNICUS/S2_SR_HARMONIZED · ESA/WorldCover/v100 · CHIRPS",
+                  "30 m", "2006–2025", "NASA; ESA; UCSB/CHG",
+                  "Pesos de criterio experto; sin geología ni inventario de deslizamientos para validar"),
+    "fire": ("Susceptibilidad a incendios", "Índice multicriterio heurístico",
+             "ESA/WorldCover/v100 · COPERNICUS/S2_SR_HARMONIZED · MODIS/061/MCD64A1 · SRTM",
+             "30–500 m", "quemas 2001–2025", "ESA; NASA",
+             "MCD64A1 (500 m) omite quemas pequeñas; sin variables meteorológicas"),
+    "flood": ("Susceptibilidad a inundación", "MERIT Hydro HAND + JRC GSW",
+              "MERIT/Hydro/v1_0_1 · JRC/GSW1_4/GlobalSurfaceWater", "90 m", "DEM ~2000; agua 1984–2021",
+              "Univ. Tokio; JRC", "Indicador topográfico; no sustituye la modelación hidráulica HEC-RAS"),
 }
 
 
@@ -2263,10 +2302,13 @@ def build_iso_context(results):
         mode = modes.get(mt)
         if not real:
             compl, sem = "Mapa SINTÉTICO — no se obtuvo de GEE", "No cumple"
-        elif mt in ("ndvi", "ndwi", "ndti") and mode in ("scl", "mosaico"):
+        elif mt in ("ndvi", "ndwi", "ndti", "erosion", "landslide", "fire") \
+                and mode in ("scl", "mosaico"):
             compl, sem = f"Real con composite de respaldo ({mode})", "Parcial"
         elif mt == "ndti":
             compl, sem = "Real; solo píxeles de agua", "Parcial"
+        elif mt in ("landslide", "fire"):
+            compl, sem = "Real; índice heurístico sin validación de campo", "Parcial"
         else:
             compl, sem = "Real, cobertura de la cuenca", "Cumple"
         data_rows.append({"dato": dato, "fuente": fuente, "coleccion": col,
@@ -3456,6 +3498,8 @@ def report():
             results["hist"] = _MULTI.get("hist")
             results["trend"] = _MULTI.get("trend")
             results["trend_map"] = _MULTI.get("trend_map")
+            results["rusle_basin"] = _MULTI.get("rusle")
+            results["risk_order"] = RISK_ORDER
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
@@ -3613,6 +3657,8 @@ def report_pdf():
             results["hist"] = _MULTI.get("hist")
             results["trend"] = _MULTI.get("trend")
             results["trend_map"] = _MULTI.get("trend_map")
+            results["rusle_basin"] = _MULTI.get("rusle")
+            results["risk_order"] = RISK_ORDER
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
