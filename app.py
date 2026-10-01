@@ -53,7 +53,11 @@ from utils.gee_handler import (
     debug_layer,
     last_classified,
     compute_class_areas,
-    fetch_ndvi_multiyear,
+    fetch_ndvi_history,
+    hist_epochs,
+    hist_sensors,
+    mann_kendall_sen,
+    HIST_YEARS,
     CLASS_SCHEMES
 )
 from matplotlib.colors import LinearSegmentedColormap, Normalize
@@ -64,7 +68,7 @@ app.jinja_env.globals['enumerate'] = enumerate
 
 # Versión visible del build — permite verificar qué código corre el Space
 # (aparece en /gee_status, /watershed_status y el pie de /maps).
-APP_VERSION = "v43-escenas-acotadas"
+APP_VERSION = "v44-serie-20-anios"
 GEE_AVAILABLE = initialize_gee()
 G = 9.807
 
@@ -2142,11 +2146,14 @@ def generate_all_thematic_maps(lat, lon, radius_km=15.0):
                 _MAP_AREAS[mt] = areas
     if gee_ready():
         try:
-            years = fetch_ndvi_multiyear(clat, clon, R)
-            if years:
-                _MULTI["ndvi"] = _ndvi_multiyear_panel(years, clat, clon, R, wd)
+            hist = fetch_ndvi_history(clat, clon, R, boundary)
+            _MULTI["hist"] = _history_summary(hist)
+            if hist.get("epochs"):
+                _MULTI["ndvi"] = _ndvi_epochs_panel(hist, clat, clon, R, wd)
+            if len(hist.get("series", [])) >= 3:
+                _MULTI["series"] = _history_series_chart(hist)
         except Exception as e:
-            print(f"Panel multitemporal NDVI falló: {e}")
+            print(f"Análisis temporal Landsat falló: {e}")
     return maps
 
 
@@ -2252,6 +2259,20 @@ def build_iso_context(results):
                           "resolucion": res, "actualidad": per,
                           "credibilidad": inst, "exactitud": exac,
                           "completitud": compl, "semaforo": sem})
+    hist = results.get("hist") or {}
+    if hist.get("first"):
+        n_ok = len(hist.get("series", []))
+        n_exp = hist["last"] - hist["first"] + 1 if hist.get("last") else n_ok
+        data_rows.append({
+            "dato": f"Serie temporal NDVI / agua ({HIST_YEARS} años)",
+            "fuente": "Landsat 5 TM, 7 ETM+, 8 OLI, 9 OLI-2 (C2 L2), armonizado Roy et al. 2016",
+            "coleccion": "LANDSAT/LT05 · LE07 · LC08 · LC09 /C02/T1_L2",
+            "resolucion": "30 m", "actualidad": f"may–sep {hist['first']}–{hist['last']}",
+            "credibilidad": "USGS/NASA",
+            "exactitud": "Diferencia residual entre sensores tras armonizar; "
+                         "ETM+ SLC-off (2003–2012) con huecos",
+            "completitud": f"{n_ok} de {n_exp} años con datos",
+            "semaforo": "Cumple" if n_ok >= 0.8 * n_exp else "Parcial"})
     data_rows.append({"dato": "Datos de campo (d₅₀, d₉₀, y, v, S, T)",
                       "fuente": "Declarados por el usuario", "coleccion": "Formulario",
                       "resolucion": "Puntual", "actualidad": doc["fecha"],
@@ -2359,34 +2380,144 @@ def build_iso_context(results):
 
 # Resultados auxiliares de la última generación de mapas.
 _MAP_AREAS = {}   # map_type -> [{"clase","ha","pct"}]
-_MULTI = {}       # "ndvi" -> PNG base64 del panel multitemporal
+_MULTI = {}       # "ndvi"/"series" -> PNG base64; "hist" -> resumen de 20 años
 
 
-def _ndvi_multiyear_panel(year_arrays, lat, lon, radius_km, wd):
-    """Panel comparativo NDVI por año (mismos cortes y leyenda)."""
+def _history_summary(hist):
+    """Tabla de clases por época, serie anual y tendencias (Sen / Mann-Kendall)."""
+    series = hist.get("series", [])
+    yrs = [r["year"] for r in series]
+    ndvi_t = mann_kendall_sen(yrs, [r["ndvi"] for r in series])
+    water_t = mann_kendall_sen(yrs, [r["water_ha"] for r in series])
+    epochs = sorted(hist.get("areas", {}))
+    rows = []
+    sch = CLASS_SCHEMES["ndvi"]
+    for i, lab in enumerate(sch["labels"]):
+        vals = [hist["areas"][y][i] for y in epochs]
+        d = (vals[-1]["pct"] - vals[0]["pct"]) if len(vals) >= 2 else None
+        rows.append({"clase": lab, "vals": vals,
+                     "delta": round(d, 1) if d is not None else None})
+    return {
+        "years": HIST_YEARS,
+        "first": yrs[0] if yrs else None, "last": yrs[-1] if yrs else None,
+        "epochs": epochs,
+        "sensors": {y: ", ".join(hist_sensors(y)) for y in epochs},
+        "class_rows": rows,
+        "area_ha": hist.get("area_ha"),
+        "series": series,
+        "ndvi_trend": ndvi_t,
+        "water_trend": water_t,
+        "errors": hist.get("errors", []),
+    }
+
+
+def _ndvi_epochs_panel(hist, lat, lon, radius_km, wd):
+    """Panel 2×3: NDVI por clases en 5 épocas (20 años) + barras de % por clase."""
     from matplotlib.patches import Patch
     deg_lat = radius_km / 111.0
     deg_lon = radius_km / (111.0 * math.cos(math.radians(lat)))
     ext = [lon - deg_lon, lon + deg_lon, lat - deg_lat, lat + deg_lat]
-    yrs = sorted(year_arrays)
-    fig, axes = plt.subplots(1, len(yrs), figsize=(4.2 * len(yrs), 4.8), dpi=120)
-    if len(yrs) == 1:
-        axes = [axes]
+    epochs = sorted(hist["epochs"])
+    sch = CLASS_SCHEMES["ndvi"]
+    fig, axes = plt.subplots(2, 3, figsize=(12, 8.6), dpi=120)
+    axes = axes.ravel()
     bnd = (wd or {}).get("boundary") or []
-    for ax, y in zip(axes, yrs):
-        ax.imshow(year_arrays[y], extent=ext, origin="upper", aspect="auto")
+    for ax, y in zip(axes, epochs):
+        ax.imshow(hist["epochs"][y], extent=ext, origin="upper", aspect="auto")
         if len(bnd) > 2:
             ax.plot([p[0] for p in bnd], [p[1] for p in bnd], color="#c0392b", lw=1.2)
-        ax.set_title(f"Estación seca {y}", fontsize=10, fontweight="bold")
+        ax.set_title(f"{y}  ({', '.join(hist_sensors(y)) or 'Landsat'})",
+                     fontsize=9, fontweight="bold")
         ax.set_xticks([]); ax.set_yticks([])
-    sch = CLASS_SCHEMES["ndvi"]
+    # Último recuadro: composición por clase (%) de cada época
+    axb = axes[5]
+    for ax in axes[len(epochs):5]:
+        ax.axis("off")
+    areas = hist.get("areas", {})
+    ys = [y for y in epochs if y in areas]
+    if ys:
+        bottom = [0.0] * len(ys)
+        for i, col in enumerate(sch["colors"]):
+            vals = [areas[y][i]["pct"] for y in ys]
+            axb.bar([str(y) for y in ys], vals, bottom=bottom, color=col,
+                    edgecolor="white", linewidth=1.5, width=0.6)
+            bottom = [b + v for b, v in zip(bottom, vals)]
+        axb.set_ylim(0, 100)
+        axb.set_ylabel("% de la cuenca", fontsize=8)
+        axb.yaxis.set_label_position("right")
+        axb.yaxis.tick_right()
+        axb.set_title("Composición por clase", fontsize=9, fontweight="bold")
+        axb.tick_params(labelsize=8)
+        for sp in ("top", "left"):
+            axb.spines[sp].set_visible(False)
+    else:
+        axb.axis("off")
     fig.legend(handles=[Patch(color=c, label=l) for c, l in zip(sch["colors"], sch["labels"])],
-               loc="lower center", ncol=3, fontsize=7, frameon=False)
-    fig.suptitle("NDVI por clases — análisis multitemporal (Sentinel-2)",
+               loc="lower center", ncol=3, fontsize=7.5, frameon=False,
+               bbox_to_anchor=(0.5, 0.025))
+    fig.suptitle(f"NDVI por clases — análisis temporal de {HIST_YEARS} años "
+                 "(Landsat 5/7/8/9 armonizado, estación seca)",
                  fontsize=11, fontweight="bold")
     fig.text(0.5, 0.005, f"Creador: {MAP_CREATOR}  |  Autor: {MAP_AUTHOR}  |  "
-             "Cortes fijos idénticos en todos los años", ha="center", fontsize=6.5)
-    fig.subplots_adjust(bottom=0.22, top=0.86, wspace=0.05)
+             "Composite mediana de 3 estaciones secas (may–sep) centrado en el año; "
+             "cortes fijos idénticos en todas las épocas", ha="center", fontsize=6.5)
+    fig.subplots_adjust(bottom=0.12, top=0.92, wspace=0.08, hspace=0.16)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _history_series_chart(hist):
+    """Serie anual de NDVI medio y superficie de agua (dos gráficos, un eje cada uno)."""
+    series = hist["series"]
+    yrs = [r["year"] for r in series]
+    has_w = any(r.get("water_ha") is not None for r in series)
+    fig, axes = plt.subplots(2 if has_w else 1, 1, figsize=(10, 6.4 if has_w else 3.4),
+                             dpi=120, sharex=True)
+    axes = list(axes) if has_w else [axes]
+    ink, muted, c1, c2 = "#222222", "#777777", "#01665e", "#2166ac"
+
+    def trend_line(ax, key, color):
+        t = mann_kendall_sen(yrs, [r[key] for r in series])
+        if not t:
+            return
+        pts = [(r["year"], r[key]) for r in series if r[key] is not None]
+        xs = sorted(x for x, _ in pts)
+        med_x = xs[len(xs) // 2]
+        med_y = sorted(v for _, v in pts)[len(pts) // 2]
+        b = med_y - t["sen"] * med_x
+        ax.plot([yrs[0], yrs[-1]], [b + t["sen"] * yrs[0], b + t["sen"] * yrs[-1]],
+                color=color, lw=1.2, ls="--")
+        ax.text(1.0, 1.02, f"Sen = {t['sen']:+.4g}/año · Mann-Kendall p = {t['p']:.3f} "
+                f"({t['tendencia']})", transform=ax.transAxes, ha="right", va="bottom",
+                fontsize=7.5, color=ink)
+
+    ax = axes[0]
+    ax.plot(yrs, [r["ndvi"] for r in series], color=c1, lw=2, marker="o", ms=4)
+    trend_line(ax, "ndvi", muted)
+    ax.set_ylabel("NDVI medio de la cuenca", fontsize=8, color=ink)
+    ax.set_title("NDVI medio — estación seca de cada año", fontsize=9,
+                 fontweight="bold", loc="left")
+    if has_w:
+        ax = axes[1]
+        ax.bar(yrs, [r["water_ha"] or 0 for r in series], color=c2, width=0.6)
+        trend_line(ax, "water_ha", muted)
+        ax.set_ylabel("Superficie de agua (ha)", fontsize=8, color=ink)
+        ax.set_title("Superficie de agua (MNDWI > 0) — estación seca", fontsize=9,
+                     fontweight="bold", loc="left")
+    for ax in axes:
+        ax.grid(axis="y", color="#e5e5e5", lw=0.6)
+        ax.set_axisbelow(True)
+        ax.tick_params(labelsize=8, colors=ink)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+    step = 2 if yrs[-1] - yrs[0] > 12 else 1
+    axes[-1].set_xticks(list(range(yrs[0], yrs[-1] + 1, step)))
+    fig.text(0.5, 0.005, f"Creador: {MAP_CREATOR}  |  Autor: {MAP_AUTHOR}  |  "
+             "Landsat C2 L2 armonizado (Roy et al. 2016); tendencia: pendiente de Sen "
+             "y prueba de Mann-Kendall (α = 0.05)", ha="center", fontsize=6.5)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches="tight")
     plt.close(fig)
@@ -3259,6 +3390,8 @@ def report():
             results["class_areas"] = dict(_MAP_AREAS)
             results["class_refs"] = {k: v["ref"] for k, v in CLASS_SCHEMES.items()}
             results["ndvi_multi"] = _MULTI.get("ndvi")
+            results["ndvi_series"] = _MULTI.get("series")
+            results["hist"] = _MULTI.get("hist")
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}
@@ -3411,6 +3544,8 @@ def report_pdf():
             results["class_areas"] = dict(_MAP_AREAS)
             results["class_refs"] = {k: v["ref"] for k, v in CLASS_SCHEMES.items()}
             results["ndvi_multi"] = _MULTI.get("ndvi")
+            results["ndvi_series"] = _MULTI.get("series")
+            results["hist"] = _MULTI.get("hist")
         except Exception as me:
             print(f"Map generation failed: {me}")
             results["maps"] = {}

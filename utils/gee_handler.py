@@ -1154,38 +1154,222 @@ def compute_class_areas(map_type, lat, lon, radius_km, boundary_lonlat=None):
         return None
 
 
-def fetch_ndvi_multiyear(lat, lon, radius_km, years=(2022, 2023, 2024),
-                         dimensions=512):
+# ── Serie histórica Landsat (20 años) ─────────────────────────────────────
+# Sentinel-2 solo existe desde 2015-2017; para 20 años se usa Landsat
+# Collection 2 Nivel 2 (TM 5, ETM+ 7, OLI 8, OLI-2 9). TM/ETM+ se llevan a la
+# escala de OLI con los coeficientes OLS de reflectancia de superficie de
+# Roy et al. (2016, Remote Sens. Environ. 185:57-70, Tabla 2), para que el
+# NDVI y el MNDWI sean comparables entre sensores.
+HIST_YEARS = 20
+HIST_STEP = 5
+_L_BANDS = ["green", "red", "nir", "swir1"]
+_ROY_SLOPE = [0.8483, 0.9047, 0.8462, 0.8937]
+_ROY_ITCP = [0.0088, 0.0061, 0.0412, 0.0254]
+_L_MAX_SCENES = 40
+
+
+def hist_last_year(today=None):
+    """Última estación seca (may–sep) completa."""
+    from datetime import date
+    today = today or date.today()
+    return today.year if today.month >= 10 else today.year - 1
+
+
+def hist_epochs(last=None):
+    """Épocas del panel: cada 5 años hasta 20 años atrás (5 épocas)."""
+    last = last or hist_last_year()
+    return list(range(last - HIST_YEARS, last + 1, HIST_STEP))
+
+
+def _landsat_prep(bands, harmonize):
+    def f(img):
+        qa = img.select("QA_PIXEL")
+        # bits 1 nube dilatada, 2 cirros, 3 nube, 4 sombra
+        clear = qa.bitwiseAnd(0b11110).eq(0)
+        sr = (img.select(bands, _L_BANDS).multiply(0.0000275).add(-0.2)
+              .updateMask(clear))
+        if harmonize:
+            sr = sr.multiply(ee.Image.constant(_ROY_SLOPE)).add(
+                ee.Image.constant(_ROY_ITCP))
+        return ee.Image(sr.rename(_L_BANDS).copyProperties(
+            img, ["system:time_start"]))
+    return f
+
+
+def _landsat_collection(region, start, end):
+    """Landsat 5/7/8/9 C2 L2, estación seca, armonizado a OLI."""
+    def base(cid):
+        return (ee.ImageCollection(cid).filterBounds(region)
+                .filterDate(start, end)
+                .filter(ee.Filter.calendarRange(5, 9, "month"))
+                .filter(ee.Filter.lt("CLOUD_COVER", 40))
+                .sort("CLOUD_COVER").limit(_L_MAX_SCENES))
+    tm_b = ["SR_B2", "SR_B3", "SR_B4", "SR_B5"]
+    oli_b = ["SR_B3", "SR_B4", "SR_B5", "SR_B6"]
+    l5 = base("LANDSAT/LT05/C02/T1_L2").map(_landsat_prep(tm_b, True))
+    # ETM+ solo antes de OLI: desde 2013 su deriva orbital degrada la serie
+    l7 = (base("LANDSAT/LE07/C02/T1_L2").filterDate(start, "2013-01-01")
+          .map(_landsat_prep(tm_b, True)))
+    l8 = base("LANDSAT/LC08/C02/T1_L2").map(_landsat_prep(oli_b, False))
+    l9 = base("LANDSAT/LC09/C02/T1_L2").map(_landsat_prep(oli_b, False))
+    return l5.merge(l7).merge(l8).merge(l9)
+
+
+def _landsat_median(col):
+    """Mediana robusta: un año sin escenas da bandas enmascaradas, no error."""
+    empty = (ee.Image.constant([0, 0, 0, 0]).rename(_L_BANDS).toFloat()
+             .updateMask(0))
+    return col.merge(ee.ImageCollection([empty])).median()
+
+
+def hist_sensors(year):
+    """Sensores Landsat disponibles en la estación seca de un año."""
+    s = []
+    if 1984 <= year <= 2011:
+        s.append("TM 5")
+    if 1999 <= year <= 2012:
+        s.append("ETM+ 7" + (" (SLC-off)" if year >= 2003 else ""))
+    if year >= 2013:
+        s.append("OLI 8")
+    if year >= 2022:
+        s.append("OLI-2 9")
+    return s
+
+
+def _hist_scale(radius_km):
+    return 60 if radius_km <= 30 else 120 if radius_km <= _LARGE_WINDOW_KM else 250
+
+
+def fetch_ndvi_history(lat, lon, radius_km, boundary_lonlat=None,
+                       dimensions=420, last=None):
     """
-    Serie multitemporal de NDVI por clases: un composite de estación seca por
-    año, mismos cortes y leyenda. Devuelve {año: array RGBA} (años que fallen
-    se omiten) — base del panel comparativo del informe.
+    Análisis temporal de 20 años con Landsat armonizado.
+
+    Devuelve dict:
+      epochs : {año: array RGBA}  NDVI por clases, composite de 3 estaciones
+               secas centrado en el año (mismos cortes que el mapa 4)
+      areas  : {año: [{"clase","pct","ha"}]}  dentro de la cuenca
+      series : [{"year","ndvi","water_ha","valid"}]  una estación seca por año
+      area_ha: superficie de la geometría analizada
     """
     import requests
     from matplotlib import image as mpimg
-    out = {}
+    out = {"epochs": {}, "areas": {}, "series": [], "area_ha": None,
+           "errors": []}
     if not _GEE_READY:
         return out
+    last = last or hist_last_year()
+    first = last - HIST_YEARS
     region = _build_region(lat, lon, radius_km)
+    geom = (ee.Geometry.Polygon([boundary_lonlat])
+            if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+    scale = _hist_scale(radius_km)
     sch = CLASS_SCHEMES["ndvi"]
-    for y in years:
-        span = (f"{y}-01-01", f"{y + 1}-01-01")
-        for mode in ("cloudscore", "scl"):
-            try:
-                s2 = _s2_composite(region, mode=mode, years=span)
-                cls = _classify(s2.normalizedDifference(["B8", "B4"]),
-                                sch["breaks"])
-                url = cls.visualize(min=0, max=len(sch["colors"]) - 1,
-                                    palette=sch["colors"]).getThumbURL(
-                    {"region": region, "dimensions": dimensions,
-                     "format": "png"})
-                r = requests.get(url, timeout=120)
-                if r.status_code == 200:
-                    out[y] = mpimg.imread(io.BytesIO(r.content))
-                    break
-            except Exception as e:
-                print(f"NDVI {y} [{mode}] failed: {e}")
+    try:
+        out["area_ha"] = round(geom.area(maxError=10).divide(1e4).getInfo(), 1)
+    except Exception as e:
+        out["errors"].append(f"área: {e}")
+    tot = out["area_ha"] or 0.0
+
+    for y in hist_epochs(last):
+        start = f"{y - 1}-01-01"
+        end = f"{min(y + 1, last) + 1}-01-01"
+        try:
+            comp = _landsat_median(_landsat_collection(region, start, end))
+            cls = _classify(comp.normalizedDifference(["nir", "red"]),
+                            sch["breaks"])
+            url = cls.visualize(min=0, max=len(sch["colors"]) - 1,
+                                palette=sch["colors"]).getThumbURL(
+                {"region": region, "dimensions": dimensions, "format": "png"})
+            r = requests.get(url, timeout=120)
+            if r.status_code != 200:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            out["epochs"][y] = mpimg.imread(io.BytesIO(r.content))
+            # % por clase sobre píxeles válidos (los huecos SLC-off o nubes
+            # no restan superficie); ha = % × área de la cuenca
+            res = (ee.Image.pixelArea().addBands(cls)
+                   .reduceRegion(reducer=ee.Reducer.sum().group(
+                       groupField=1, groupName="clase"),
+                       geometry=geom, scale=scale, maxPixels=1e10,
+                       bestEffort=True, tileScale=8).getInfo())
+            groups = {int(g["clase"]): float(g["sum"])
+                      for g in res.get("groups", [])}
+            vsum = sum(groups.values()) or 1.0
+            out["areas"][y] = [
+                {"clase": lab,
+                 "pct": round(100.0 * groups.get(i, 0.0) / vsum, 1),
+                 "ha": round(tot * groups.get(i, 0.0) / vsum, 1)}
+                for i, lab in enumerate(sch["labels"])]
+        except Exception as e:
+            out["errors"].append(f"época {y}: {e}")
+            print(f"NDVI histórico {y} falló: {e}")
+
+    # Serie anual: un solo getInfo para los 21 años (cálculo en el servidor)
+    def per_year(y):
+        y = ee.Number(y)
+        d0 = ee.Date.fromYMD(y, 1, 1)
+        col = _landsat_collection(region, d0, d0.advance(1, "year"))
+        comp = _landsat_median(col)
+        ndvi = comp.normalizedDifference(["nir", "red"]).rename("ndvi")
+        water = comp.normalizedDifference(["green", "swir1"]).gt(0).rename("water")
+        valid = ndvi.mask().rename("valid")
+        st = (ndvi.addBands(water).addBands(valid.unmask(0))
+              .reduceRegion(reducer=ee.Reducer.mean(), geometry=geom,
+                            scale=scale, maxPixels=1e10, bestEffort=True,
+                            tileScale=8))
+        return ee.Feature(None, st).set({"year": y, "n": col.size()})
+    try:
+        fc = ee.FeatureCollection(ee.List.sequence(first, last).map(per_year))
+        for f in fc.getInfo()["features"]:
+            p = f["properties"]
+            n = int(p.get("n") or 0)
+            if not n or p.get("ndvi") is None:
+                continue
+            out["series"].append({
+                "year": int(p["year"]),
+                "ndvi": round(float(p["ndvi"]), 4),
+                "water_ha": (round(float(p.get("water") or 0) * tot, 1)
+                             if tot else None),
+                "valid": round(100.0 * float(p.get("valid") or 0), 1),
+                "escenas": n})
+    except Exception as e:
+        out["errors"].append(f"serie anual: {e}")
+        print(f"Serie anual Landsat falló: {e}")
     return out
+
+
+def mann_kendall_sen(years, values):
+    """
+    Tendencia monotónica: pendiente de Sen (unid./año) y prueba de
+    Mann-Kendall (aprox. normal, sin corrección por empates). Devuelve dict
+    o None si hay menos de 8 datos.
+    """
+    import math
+    pts = [(float(x), float(v)) for x, v in zip(years, values) if v is not None]
+    n = len(pts)
+    if n < 8:
+        return None
+    s = 0
+    slopes = []
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            d = pts[j][1] - pts[i][1]
+            s += (d > 0) - (d < 0)
+            dx = pts[j][0] - pts[i][0]
+            if dx:
+                slopes.append(d / dx)
+    var = n * (n - 1) * (2 * n + 5) / 18.0
+    z = (s - 1) / math.sqrt(var) if s > 0 else (s + 1) / math.sqrt(var) if s < 0 else 0.0
+    p = 2 * (1 - 0.5 * (1 + math.erf(abs(z) / math.sqrt(2))))
+    slopes.sort()
+    m = len(slopes)
+    sen = (slopes[m // 2] if m % 2 else 0.5 * (slopes[m // 2 - 1] + slopes[m // 2]))
+    if p >= 0.05:
+        trend = "sin tendencia significativa"
+    else:
+        trend = "creciente" if s > 0 else "decreciente"
+    return {"n": n, "S": s, "z": round(z, 2), "p": round(p, 4),
+            "sen": sen, "tendencia": trend}
 
 
 def debug_layer(map_type, lat, lon, radius_km=15.0):
