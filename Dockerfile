@@ -26,4 +26,4 @@ RUN mkdir -p /tmp/numba_cache /tmp/mpl_cache /tmp/xdg_cache && chmod 777 /tmp/nu
 # por cuenca) y la compilación JIT concurrente entre varios workers corrompe la
 # caché de numba (KeyError en funciones generadas). Con 1 worker la compilación
 # es secuencial y estable. Timeout amplio para el primer geoproceso (cacheado).
-CMD ["gunicorn", "app:app", "--workers", "1", "--threads", "4", "--bind", "0.0.0.0:7860", "--timeout", "300"]
+CMD ["gunicorn", "app:app", "--workers", "1", "--threads", "4", "--bind", "0.0.0.0:7860", "--timeout", "900"]

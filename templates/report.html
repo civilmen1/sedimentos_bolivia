@@ -488,7 +488,7 @@ table tfoot td {
   <p>Las relaciones geométricas fundamentales del cauce se determinan mediante aforos directos y análisis de secciones transversales. El tirante hidráulico medido en campo es y = {{ results.depth }} m, correspondiente a la profundidad media de flujo. La relación ancho-profundidad [W/D = ancho_m / {{ results.depth }} m] y el radio hidráulico [R_h ≈ y para cauces anchos] son parámetros determinantes en la resistencia al flujo y la capacidad de transporte.</p>
 
   <h2>3.3 Patrón en Planta</h2>
-  <p>El patrón en planta del cauce se evalúa mediante el índice de sinuosidad (IS = longitud del cauce / longitud en línea recta). Para cauces de tipo {{ results.rosgen_type }} según Rosgen, el índice de sinuosidad esperado es [IS = valor]. El análisis multitemporal con imágenes Landsat (2014, 2019, 2024) permite cuantificar la migración lateral del canal, indicador clave de inestabilidad morfofluvial (ver Apéndice E, Mapa 8).</p>
+  <p>El patrón en planta del cauce se evalúa mediante el índice de sinuosidad (IS = longitud del cauce / longitud en línea recta). Para cauces de tipo {{ results.rosgen_type }} según Rosgen, el índice de sinuosidad esperado es {% set _is = {'A':'menor de 1.2','B':'mayor de 1.2','C':'mayor de 1.2 (típicamente 1.4–2.0)','D':'no aplicable (cauce trenzado, IS ≈ 1)','DA':'muy variable (anastomosado)','E':'mayor de 1.5','F':'mayor de 1.2','G':'mayor de 1.2'} %}{{ _is.get((results.rosgen_type or '')[:2] if (results.rosgen_type or '')[:2] == 'DA' else (results.rosgen_type or '')[:1], 'según la clase Rosgen asignada') }} (Rosgen 1994). La evolución de la superficie de agua y de la cobertura vegetal en los últimos {{ results.hist.years if results.hist else 20 }} años (Landsat armonizado) se presenta en la sección 8.7; la migración lateral del cauce debe confirmarse con la frecuencia de inundación JRC (Mapa 8) y levantamiento topográfico.</p>
 
   <h2>3.4 Perfil Longitudinal</h2>
   <p>La pendiente media del cauce principal S = {{ results.slope }} m/m ({{ results.slope_pct }}%), obtenida a partir del modelo SRTM, determina la energía disponible para el transporte. Pendientes superiores a 0.005 m/m caracterizan regímenes de alta energía con predominio de carga de fondo, mientras que pendientes inferiores a 0.001 m/m favorecen la acumulación de material fino en suspensión.</p>
@@ -881,8 +881,8 @@ table tfoot td {
       <tr><td><strong>Morf02</strong> — Red Hidrográfica</td><td>HydroSHEDS + SRTM</td><td class="td-num">30 m</td><td>Drenaje acumulado ≥ 1 000 celdas; caudal acumulado normalizado</td></tr>
       <tr><td><strong>Morf03</strong> — Pendiente del Lecho</td><td>SRTM ee.Terrain</td><td class="td-num">30 m</td><td>Pendiente en m/m (S = tan α); estadísticas zonales en buffer 2 km</td></tr>
       <tr><td><strong>Morf04</strong> — Cobertura ESA WorldCover</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Clasificación de 11 clases de uso del suelo; Manning's n asociado</td></tr>
-      <tr><td><strong>Morf05</strong> — NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Vegetación de Diferencia Normalizada (B8–B4)/(B8+B4); mediana 2020–2023</td></tr>
-      <tr><td><strong>Morf06</strong> — NDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Agua de Diferencia Normalizada (B3–B8)/(B3+B8); cuerpos de agua &gt; 0</td></tr>
+      <tr><td><strong>Morf05</strong> — NDVI</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Índice de Vegetación de Diferencia Normalizada (B8–B4)/(B8+B4); mediana de estación seca 2022–2024 (Cloud Score+). Serie interanual 20 años con Landsat armonizado (secciones 8.7 y 8.8)</td></tr>
+      <tr><td><strong>Morf06</strong> — MNDWI</td><td>Sentinel-2 L2A</td><td class="td-num">10–20 m</td><td>Índice de Agua de Diferencia Normalizada Modificado (B3–B11)/(B3+B11) (Xu 2006); agua &gt; 0</td></tr>
       <tr><td><strong>Morf07</strong> — Turbidez (FNU)</td><td>Sentinel-2 L2A</td><td class="td-num">10 m</td><td>Turbidez Nechad/Dogliotti en FNU≈NTU; enmascarada a agua; validar con HYBAM</td></tr>
       <tr><td><strong>Morf08</strong> — Manning's n</td><td>ESA WorldCover 2021</td><td class="td-num">10 m</td><td>Coeficiente de rugosidad de Manning reclasificado por tipo de cobertura</td></tr>
       <tr><td><strong>Morf09</strong> — Número de Curva CN</td><td>ESA WorldCover + SRTM</td><td class="td-num">10 m</td><td>Curva Número SCS-CN para cálculo de escorrentía directa (AMC II)</td></tr>
@@ -916,14 +916,11 @@ table tfoot td {
   {% endfor %}
   {% endif %}
 
-  {% if results.ndvi_multi %}
-  <h2>8.7 Análisis Multitemporal de la Vegetación (NDVI por clases)</h2>
-  <p>Composite de estación seca (mayo–septiembre) por año, con los mismos cortes de clase y la misma leyenda en todos los paneles, lo que permite comparar directamente los cambios de cobertura vegetal entre periodos.</p>
-  <figure class="apa-figure" style="page-break-inside:avoid;">
-    <img src="{{ results.ndvi_multi }}" alt="NDVI multitemporal">
-    <figcaption><em>Figura.</em> NDVI por clases — estación seca de cada año (Sentinel-2 L2A, Cloud Score+). {{ results.class_refs['ndvi'] }}. Creador: www.frava.tech.</figcaption>
-  </figure>
-  {% endif %}
+  {% if results.hist or results.ndvi_multi %}
+{% include "_historico.html" %}
+{% endif %}
+{% include "_ndvi_informe.html" %}
+{% include "_riesgos.html" %}
 
   <!-- CAPÍTULO 9 -->
   <h1>9. Impactos sobre Infraestructura</h1>
@@ -1032,7 +1029,7 @@ table tfoot td {
     🗺️ Ver Mapas
   </a>
   <a class="btn-action btn-pdf"
-     href="/report/pdf?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}&rho_s={{ results.rho_s }}&depth={{ results.depth }}&velocity={{ results.velocity }}&temp={{ results.temp }}&slope={{ results.slope }}">
+     href="/report/pdf?lat={{ results.lat }}&lon={{ results.lon }}&d50={{ results.d50 }}&d90={{ results.d90 }}&rho_s={{ results.rho_s }}&depth={{ results.depth }}&velocity={{ results.velocity }}&temp={{ results.temp }}&slope={{ results.slope }}{% if results.area_name %}&area={{ results.area_name|urlencode }}{% endif %}">
     📄 Descargar PDF
   </a>
   <button class="btn-action btn-print" onclick="window.print()">

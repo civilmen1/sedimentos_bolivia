@@ -135,6 +135,10 @@
               <input type="number" id="lon" value="-68.1500" step="0.000001" class="inp mono">
             </div>
           </div>
+          <div class="mt-3">
+            <label class="lbl">Nombre del área de estudio (opcional)</label>
+            <input type="text" id="area" maxlength="120" placeholder="Ej.: Cuenca del río ..." class="inp">
+          </div>
           <p class="text-xs text-blue-500 mt-2">↙ Haga clic en el mapa para fijar la ubicación</p>
         </div>
 
@@ -1096,6 +1100,7 @@ function generateReport() {
     velocity: document.getElementById('velocity').value,
     temp:     document.getElementById('temp').value,
     slope:    document.getElementById('slope').value,
+    area:     document.getElementById('area').value,
     // Socavación (opcional)
     caudal:          document.getElementById('caudal').value,
     ancho_b:         document.getElementById('ancho_b').value,

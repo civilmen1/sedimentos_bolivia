@@ -1,0 +1,50 @@
+{# Análisis temporal de 20 años (Landsat armonizado). Requiere results.hist #}
+{% set h = results.hist %}
+<h2>8.7 Análisis Temporal de {{ h.years if h else 20 }} Años (NDVI y superficie de agua)</h2>
+<p>Para cubrir {{ h.years if h else 20 }} años no basta Sentinel-2 (disponible desde 2015–2017), por lo que la serie usa <strong>Landsat Collection 2 Nivel 2</strong> a 30 m: TM 5 (hasta 2011), ETM+ 7 (hasta 2012), OLI 8 (desde 2013) y OLI-2 9 (desde 2022). Las reflectancias de TM y ETM+ se llevaron a la escala de OLI con los coeficientes de Roy et al. (2016), de modo que el NDVI y el MNDWI son comparables entre sensores. Se enmascararon nubes, cirros y sombras con la banda QA_PIXEL y se usó solo la estación seca (mayo–septiembre), igual que en los mapas 4 a 6.</p>
+<p>Se presentan cinco épocas cada cinco años. Cada época es la mediana de tres estaciones secas centradas en el año indicado, lo que rellena los huecos del ETM+ (SLC-off) y las nubes. Los cortes de clase son los mismos del mapa 4. Los porcentajes se calculan sobre los píxeles válidos dentro del parteaguas, y las hectáreas resultan de multiplicar ese porcentaje por la superficie de la cuenca{% if h and h.area_ha %} ({{ "{:,.0f}".format(h.area_ha) }} ha){% endif %}.</p>
+
+{% if results.ndvi_multi %}
+<figure class="apa-figure" style="page-break-inside:avoid;">
+  <img src="{{ results.ndvi_multi }}" alt="NDVI por clases en cinco épocas">
+  <figcaption><em>Figura.</em> NDVI por clases en {{ h.epochs|length if h else 5 }} épocas{% if h and h.epochs %} ({{ h.epochs|first }}–{{ h.epochs|last }}){% endif %}, Landsat armonizado. {{ results.class_refs['ndvi'] }}. Creador: www.frava.tech.</figcaption>
+</figure>
+{% endif %}
+
+{% if h and h.class_rows and h.epochs %}
+<table style="width:100%; font-size:8pt; page-break-inside:avoid;">
+  <thead>
+    <tr><th>Clase NDVI</th>
+      {% for y in h.epochs %}<th style="text-align:right;">{{ y }}<br><span style="font-weight:normal;">% (ha)</span></th>{% endfor %}
+      <th style="text-align:right;">Cambio<br>{{ h.epochs|first }}–{{ h.epochs|last }} (p.p.)</th></tr>
+  </thead>
+  <tbody>
+  {% for r in h.class_rows %}
+    <tr><td>{{ r.clase }}</td>
+      {% for v in r.vals %}<td style="text-align:right;">{{ v.pct }} ({{ "{:,.0f}".format(v.ha) }})</td>{% endfor %}
+      <td style="text-align:right;">{% if r.delta is not none %}{{ "%+.1f"|format(r.delta) }}{% else %}—{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="no-indent" style="text-indent:0; font-size:7.5pt; color:#555;">Sensores por época: {% for y in h.epochs %}{{ y }}: {{ h.sensors[y] }}{% if not loop.last %}; {% endif %}{% endfor %}. p.p. = puntos porcentuales.</p>
+{% endif %}
+
+{% if results.ndvi_series %}
+<figure class="apa-figure" style="page-break-inside:avoid;">
+  <img src="{{ results.ndvi_series }}" alt="Serie anual de NDVI y superficie de agua">
+  <figcaption><em>Figura.</em> Serie anual {{ h.first }}–{{ h.last }}: NDVI medio de la cuenca y superficie de agua (MNDWI &gt; 0, Xu 2006) en la estación seca, con la tendencia de Sen. Creador: www.frava.tech.</figcaption>
+</figure>
+{% endif %}
+
+{% if h and (h.ndvi_trend or h.water_trend) %}
+<p><strong>Tendencias ({{ h.first }}–{{ h.last }}, prueba de Mann-Kendall, α = 0.05).</strong>
+{% if h.ndvi_trend %}NDVI medio: {{ h.ndvi_trend.tendencia }} (pendiente de Sen {{ "%+.4f"|format(h.ndvi_trend.sen) }} por año, equivalente a {{ "%+.3f"|format(h.ndvi_trend.sen * 10) }} por década; p = {{ h.ndvi_trend.p }}; n = {{ h.ndvi_trend.n }} años).{% endif %}
+{% if h.water_trend %} Superficie de agua: {{ h.water_trend.tendencia }} ({{ "%+.1f"|format(h.water_trend.sen) }} ha por año; p = {{ h.water_trend.p }}).{% endif %}
+Una tendencia decreciente del NDVI indica pérdida de cobertura vegetal y mayor exposición del suelo a la erosión (factor C de RUSLE), con más aporte de sedimentos al cauce. La superficie de agua en estiaje refleja tanto cambios del cauce como la variabilidad de las lluvias, por lo que debe contrastarse con la precipitación del SENAMHI antes de atribuirla a cambios de uso del suelo.</p>
+{% endif %}
+
+{% if h and h.series %}
+{% set faltan = (h.last - h.first + 1) - h.series|length %}
+{% if faltan > 0 %}<p class="no-indent" style="text-indent:0; font-size:8pt; color:#c0392b;">Años sin escenas válidas en la estación seca: {{ faltan }}. Se omiten de la serie y de la prueba de tendencia.</p>{% endif %}
+{% endif %}
+{% if h and h.errors %}<p class="no-indent" style="text-indent:0; font-size:8pt; color:#c0392b;">Avisos de GEE: {{ h.errors|join('; ') }}</p>{% endif %}

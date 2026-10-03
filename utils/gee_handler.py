@@ -520,6 +520,34 @@ LAYER_META = {
         "title": "Frecuencia de Inundación — JRC Global Surface Water",
         "legend": "Frecuencia de inundación (%)",
     },
+    "erosion": {
+        "vmin": 0, "vmax": 80,
+        "palette": ["#1a9850", "#a6d96a", "#fee08b", "#fdae61", "#f46d43", "#d73027"],
+        "source": "RUSLE A = R·K·LS·C·P — CHIRPS 2006–2025 (R, Hurni 1985) · OpenLandMap textura (K) · SRTM + MERIT Hydro (LS, Moore & Burch 1986) · Sentinel-2 NDVI estación seca (C, van der Knijff) · ESA WorldCover (P)",
+        "title": "Susceptibilidad a Erosión Hídrica — Pérdida de Suelo RUSLE",
+        "legend": "Pérdida de suelo (t/ha/año)",
+    },
+    "landslide": {
+        "vmin": 0, "vmax": 1,
+        "palette": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "source": "Índice multicriterio — pendiente SRTM (condicionante) × [cobertura NDVI Sentinel-2 0.4 · uso del suelo ESA WorldCover 0.3 · precipitación CHIRPS 0.3]",
+        "title": "Susceptibilidad a Deslizamientos (índice multicriterio)",
+        "legend": "Índice de susceptibilidad (0–1)",
+    },
+    "fire": {
+        "vmin": 0, "vmax": 1,
+        "palette": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "source": "Índice multicriterio — combustible (ESA WorldCover × NDVI Sentinel-2 estación seca) × [recurrencia de quemas MODIS MCD64A1 2001–2025 0.5 · pendiente SRTM 0.3 · orientación 0.2]",
+        "title": "Susceptibilidad a Incendios Forestales (índice multicriterio)",
+        "legend": "Índice de susceptibilidad (0–1)",
+    },
+    "flood": {
+        "vmin": -30, "vmax": 0,
+        "palette": ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+        "source": "MERIT Hydro HAND (altura sobre el drenaje más cercano, 90 m) + JRC Global Surface Water (ocurrencia ≥ 50 %)",
+        "title": "Susceptibilidad a Inundación — HAND (MERIT Hydro)",
+        "legend": "−HAND (m)",
+    },
     "watershed": {
         "vmin": 0, "vmax": 1,
         "palette": ["#cce5ff", "#4a90d9", "#003399"],
@@ -584,7 +612,160 @@ def _layer_image(map_type, region, radius_km=15.0, mode="cloudscore"):
         return (ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
                 .select("occurrence").clip(region))
 
+    if map_type in RISK_LAYERS:
+        return _risk_image(map_type, region, radius_km, mode).clip(region)
+
     raise ValueError(f"Capa desconocida: {map_type}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MAPAS DE RIESGO (susceptibilidad) — erosión, deslizamientos, incendios,
+# inundación. Índices de SUSCEPTIBILIDAD a partir de factores condicionantes;
+# no son mapas de amenaza con probabilidad ni de riesgo con vulnerabilidad.
+# ════════════════════════════════════════════════════════════════════════════
+RISK_LAYERS = ("erosion", "landslide", "fire", "flood")
+_RISK_NDVI = {"erosion", "landslide", "fire"}
+RISK_PERIOD = ("2006-01-01", "2026-01-01")   # 20 años de precipitación
+
+
+def _precip_annual(period=RISK_PERIOD):
+    """Precipitación media anual (mm) CHIRPS, a partir de pentadas."""
+    n_years = int(period[1][:4]) - int(period[0][:4])
+    return (ee.ImageCollection("UCSB-CHG/CHIRPS/PENTAD")
+            .filterDate(period[0], period[1]).select("precipitation")
+            .sum().divide(n_years).rename("p"))
+
+
+def _risk_ndvi(region, radius_km, mode):
+    if radius_km > _LARGE_WINDOW_KM:
+        return _modis_index(region, "ndvi")
+    return _s2_index(region, "ndvi", mode=mode)
+
+
+def _worldcover():
+    return ee.Image("ESA/WorldCover/v100/2020").select("Map")
+
+
+_WC = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+
+
+def rusle_image(region, radius_km=15.0, mode="cloudscore"):
+    """Pérdida de suelo RUSLE por píxel (t/ha/año), mismas fórmulas que
+    models.rusle (R Hurni, K por textura USDA, S McCool → LS Moore & Burch,
+    C van der Knijff, P por cultivo y pendiente)."""
+    dem = ee.Image("USGS/SRTMGL1_003")
+    slope_deg = ee.Terrain.slope(dem)
+    beta = slope_deg.multiply(math.pi / 180)
+    # R
+    R = _precip_annual().multiply(0.562).subtract(8.12).max(0)
+    # K (OpenLandMap clase textural USDA 1..12 → K, ver models.rusle)
+    K = (ee.Image("OpenLandMap/SOL/SOL_TEXTURE-CLASS_USDA-TT_M/v02").select("b0")
+         .remap(list(range(1, 13)),
+                [0.0288, 0.0341, 0.0360, 0.0394, 0.0423, 0.0264,
+                 0.0394, 0.0499, 0.0500, 0.0450, 0.0170, 0.0053]))
+    # LS (Moore & Burch 1986) con área de aporte específica de MERIT Hydro,
+    # acotada a 300 m (longitud de ladera; en cauces el proceso ya no es
+    # erosión laminar/en surcos).
+    upa = ee.Image("MERIT/Hydro/v1_0_1").select("upa")          # km²
+    As = upa.multiply(1e6).divide(ee.Image.pixelArea().sqrt()).min(300)
+    LS = (As.divide(22.13).pow(0.4)
+          .multiply(beta.sin().divide(0.0896).pow(1.3)))
+    # C (van der Knijff): exp(−2·NDVI/(1−NDVI)), en [0, 1]
+    nd = _risk_ndvi(region, radius_km, mode).min(0.95)
+    C = nd.multiply(-2).divide(nd.multiply(-1).add(1)).exp().clamp(0, 1)
+    # P: 1 salvo cultivo (WorldCover 40), según pendiente
+    sp = beta.tan().multiply(100)
+    p_crop = (ee.Image(0.9).where(sp.lt(20), 0.8).where(sp.lt(16), 0.7)
+              .where(sp.lt(12), 0.6).where(sp.lt(8), 0.5).where(sp.lt(2), 0.6))
+    lc = _worldcover()
+    P = ee.Image(1).where(lc.eq(40), p_crop)
+    A = R.multiply(K).multiply(LS).multiply(C).multiply(P)
+    water = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence")
+             .unmask(0).gte(50)).Or(lc.eq(80))
+    return A.updateMask(water.Not()).rename("A")
+
+
+def rusle_basin_stats(lat, lon, radius_km, boundary_lonlat=None):
+    """Pérdida de suelo media de la cuenca (t/ha/año), mediana y total anual
+    (t/año) con el mismo modo de composite del mapa. None si no hay datos."""
+    if not _GEE_READY:
+        return None
+    mode = _LAST_MODE.get("erosion") or "cloudscore"
+    try:
+        region = _build_region(lat, lon, radius_km)
+        geom = (ee.Geometry.Polygon([boundary_lonlat])
+                if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+        A = rusle_image(region, radius_km, mode)
+        st = A.reduceRegion(
+            reducer=ee.Reducer.mean().combine(ee.Reducer.median(), sharedInputs=True)
+            .combine(ee.Reducer.count(), sharedInputs=True),
+            geometry=geom, scale=90, maxPixels=1e10, bestEffort=True,
+            tileScale=8).getInfo()
+        mean = st.get("A_mean")
+        if mean is None:
+            return None
+        area_ha = geom.area(maxError=10).divide(1e4).getInfo()
+        return {"mean": round(mean, 2), "median": round(st.get("A_median") or 0, 2),
+                "area_ha": round(area_ha, 1),
+                "total_t": round(mean * area_ha, 0), "mode": mode}
+    except Exception as e:
+        print(f"RUSLE de cuenca falló: {e}")
+        return None
+
+
+def _risk_image(map_type, region, radius_km, mode):
+    dem = ee.Image("USGS/SRTMGL1_003")
+    slope = ee.Terrain.slope(dem)
+    lc = _worldcover()
+    if map_type == "erosion":
+        return rusle_image(region, radius_km, mode)
+
+    if map_type == "flood":
+        hnd = ee.Image("MERIT/Hydro/v1_0_1").select("hnd")
+        occ = (ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence")
+               .unmask(0))
+        return hnd.multiply(-1).where(occ.gte(50), 0).rename("flood")
+
+    nd = _risk_ndvi(region, radius_km, mode)
+    if map_type == "landslide":
+        f_s = (ee.Image(0).where(slope.gte(5), 0.25).where(slope.gte(15), 0.5)
+               .where(slope.gte(25), 0.8).where(slope.gte(35), 1.0))
+        f_v = nd.subtract(0.1).divide(0.6).clamp(0, 1).multiply(-1).add(1)
+        f_lc = lc.remap(_WC, [0.2, 0.5, 0.7, 0.8, 0.6, 0.9, 0, 0, 0.3, 0.2, 0.6])
+        f_p = _precip_annual().subtract(300).divide(1200).clamp(0, 1)
+        idx = f_s.multiply(
+            f_v.multiply(0.4).add(f_lc.multiply(0.3)).add(f_p.multiply(0.3))
+            .multiply(0.5).add(0.5))
+        return idx.updateMask(lc.neq(70).And(lc.neq(80))).rename("landslide")
+
+    if map_type == "fire":
+        f_lc = lc.remap(_WC, [0.7, 1.0, 1.0, 0.7, 0.1, 0, 0, 0, 0.3, 0.4, 0.4])
+        f_v = (ee.Image(1).where(nd.gt(0.5),
+                                 nd.subtract(0.5).divide(0.3).multiply(-0.6).add(1))
+               .where(nd.lt(0.1), 0).clamp(0, 1).updateMask(nd.mask()))
+        last = int(RISK_PERIOD[1][:4]) - 1
+
+        def burned(y):
+            y = ee.Number(y)
+            d0 = ee.Date.fromYMD(y, 1, 1)
+            return (ee.ImageCollection("MODIS/061/MCD64A1")
+                    .filterDate(d0, d0.advance(1, "year")).select("BurnDate")
+                    .max().gt(0).unmask(0).rename("b"))
+        n_burn = ee.ImageCollection(ee.List.sequence(2001, last).map(burned)).sum()
+        f_b = n_burn.divide(3).clamp(0, 1)
+        f_s = slope.divide(35).clamp(0, 1)
+        asp = ee.Terrain.aspect(dem).multiply(math.pi / 180)
+        # Hemisferio sur: laderas orientadas al norte reciben más radiación
+        north = asp.cos().add(1).divide(2)
+        lat_c = region.centroid(1).coordinates().get(1)
+        f_a = ee.Image(ee.Algorithms.If(ee.Number(lat_c).lt(0), north,
+                                        north.multiply(-1).add(1)))
+        idx = f_lc.multiply(f_v).multiply(
+            f_b.multiply(0.5).add(f_s.multiply(0.3)).add(f_a.multiply(0.2))
+            .multiply(0.7).add(0.3))
+        return idx.rename("fire")
+
+    raise ValueError(f"Capa de riesgo desconocida: {map_type}")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -995,6 +1176,35 @@ CLASS_SCHEMES = {
         "ref": "Cortes propuestos: 10 FNU (detección NDTI, IWA WQRJ 60(4)); "
                "250 FNU (saturación banda roja, Dogliotti et al. 2015)",
     },
+    "erosion": {   # mismas clases que models.rusle.clase_severidad
+        "breaks": [5.0, 10.0, 20.0, 40.0, 80.0],
+        "labels": ["Ligera (< 5 t/ha/año)", "Moderada (5 – 10)", "Alta (10 – 20)",
+                   "Muy alta (20 – 40)", "Severa (40 – 80)", "Crítica (> 80)"],
+        "colors": ["#1a9850", "#a6d96a", "#fee08b", "#fdae61", "#f46d43", "#d73027"],
+        "ref": "RUSLE (Renard et al. 1997); clases de severidad del modelo RUSLE del software",
+    },
+    "landslide": {
+        "breaks": [0.2, 0.4, 0.6, 0.8],
+        "labels": ["Muy baja (< 0.2)", "Baja (0.2 – 0.4)", "Media (0.4 – 0.6)",
+                   "Alta (0.6 – 0.8)", "Muy alta (> 0.8)"],
+        "colors": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "ref": "Índice heurístico multicriterio; cortes por quintiles del rango 0–1 (criterio operativo)",
+    },
+    "fire": {
+        "breaks": [0.2, 0.4, 0.6, 0.8],
+        "labels": ["Muy baja (< 0.2)", "Baja (0.2 – 0.4)", "Media (0.4 – 0.6)",
+                   "Alta (0.6 – 0.8)", "Muy alta (> 0.8)"],
+        "colors": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+        "ref": "Índice heurístico multicriterio con recurrencia de quemas MODIS MCD64A1; cortes operativos",
+    },
+    "flood": {   # sobre −HAND: clase = nº de cortes superados
+        "breaks": [-15.0, -6.0, -3.0, -1.0],
+        "labels": ["Muy baja (HAND > 15 m)", "Baja (HAND 6 – 15 m)",
+                   "Media (HAND 3 – 6 m)", "Alta (HAND 1 – 3 m)",
+                   "Muy alta (HAND < 1 m o agua JRC ≥ 50 %)"],
+        "colors": ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+        "ref": "HAND de MERIT Hydro (Yamazaki et al. 2019; Nobre et al. 2011); umbrales operativos",
+    },
 }
 
 # Último error por capa (para mostrarlo, nunca ocultarlo), modo de composite
@@ -1028,7 +1238,8 @@ def _classify(img, breaks):
 
 
 def _modes_for(map_type):
-    return COMPOSITE_MODES if map_type in _INDEX_LAYERS else ("cloudscore",)
+    return (COMPOSITE_MODES if map_type in _INDEX_LAYERS or map_type in _RISK_NDVI
+            else ("cloudscore",))
 
 
 def _is_classified(map_type, radius_km):
@@ -1096,7 +1307,7 @@ def fetch_gee_thumbnail(map_type, lat, lon, radius_km=15.0, dimensions=1024):
     region = _build_region(lat, lon, radius_km)
     meta = LAYER_META[map_type]
     classified = _is_classified(map_type, radius_km)
-    if map_type in _INDEX_LAYERS:
+    if map_type in _INDEX_LAYERS or map_type in _RISK_NDVI:
         dimensions = min(dimensions, 768)
     errors = []
     for mode in _modes_for(map_type):
@@ -1154,38 +1365,420 @@ def compute_class_areas(map_type, lat, lon, radius_km, boundary_lonlat=None):
         return None
 
 
-def fetch_ndvi_multiyear(lat, lon, radius_km, years=(2022, 2023, 2024),
-                         dimensions=512):
+# ── Serie histórica Landsat (20 años) ─────────────────────────────────────
+# Sentinel-2 solo existe desde 2015-2017; para 20 años se usa Landsat
+# Collection 2 Nivel 2 (TM 5, ETM+ 7, OLI 8, OLI-2 9). TM/ETM+ se llevan a la
+# escala de OLI con los coeficientes OLS de reflectancia de superficie de
+# Roy et al. (2016, Remote Sens. Environ. 185:57-70, Tabla 2), para que el
+# NDVI y el MNDWI sean comparables entre sensores.
+HIST_YEARS = 20
+HIST_STEP = 5
+_L_BANDS = ["green", "red", "nir", "swir1"]
+_ROY_SLOPE = [0.8483, 0.9047, 0.8462, 0.8937]
+_ROY_ITCP = [0.0088, 0.0061, 0.0412, 0.0254]
+_L_MAX_SCENES = 40
+
+
+def hist_last_year(today=None):
+    """Última estación seca (may–sep) completa."""
+    from datetime import date
+    today = today or date.today()
+    return today.year if today.month >= 10 else today.year - 1
+
+
+def hist_epochs(last=None):
+    """Épocas del panel: cada 5 años hasta 20 años atrás (5 épocas)."""
+    last = last or hist_last_year()
+    return list(range(last - HIST_YEARS, last + 1, HIST_STEP))
+
+
+def _landsat_prep(bands, harmonize):
+    def f(img):
+        qa = img.select("QA_PIXEL")
+        # bits 1 nube dilatada, 2 cirros, 3 nube, 4 sombra
+        clear = qa.bitwiseAnd(0b11110).eq(0)
+        sr = (img.select(bands, _L_BANDS).multiply(0.0000275).add(-0.2)
+              .updateMask(clear))
+        if harmonize:
+            sr = sr.multiply(ee.Image.constant(_ROY_SLOPE)).add(
+                ee.Image.constant(_ROY_ITCP))
+        return ee.Image(sr.rename(_L_BANDS).copyProperties(
+            img, ["system:time_start"]))
+    return f
+
+
+def _landsat_collection(region, start, end):
+    """Landsat 5/7/8/9 C2 L2, estación seca, armonizado a OLI."""
+    def base(cid):
+        return (ee.ImageCollection(cid).filterBounds(region)
+                .filterDate(start, end)
+                .filter(ee.Filter.calendarRange(5, 9, "month"))
+                .filter(ee.Filter.lt("CLOUD_COVER", 40))
+                .sort("CLOUD_COVER").limit(_L_MAX_SCENES))
+    tm_b = ["SR_B2", "SR_B3", "SR_B4", "SR_B5"]
+    oli_b = ["SR_B3", "SR_B4", "SR_B5", "SR_B6"]
+    l5 = base("LANDSAT/LT05/C02/T1_L2").map(_landsat_prep(tm_b, True))
+    # ETM+ solo antes de OLI: desde 2013 su deriva orbital degrada la serie
+    l7 = (base("LANDSAT/LE07/C02/T1_L2").filterDate(start, "2013-01-01")
+          .map(_landsat_prep(tm_b, True)))
+    l8 = base("LANDSAT/LC08/C02/T1_L2").map(_landsat_prep(oli_b, False))
+    l9 = base("LANDSAT/LC09/C02/T1_L2").map(_landsat_prep(oli_b, False))
+    return l5.merge(l7).merge(l8).merge(l9)
+
+
+def _landsat_median(col):
+    """Mediana robusta: un año sin escenas da bandas enmascaradas, no error."""
+    empty = (ee.Image.constant([0, 0, 0, 0]).rename(_L_BANDS).toFloat()
+             .updateMask(0))
+    return col.merge(ee.ImageCollection([empty])).median()
+
+
+def hist_sensors(year):
+    """Sensores Landsat disponibles en la estación seca de un año."""
+    s = []
+    if 1984 <= year <= 2011:
+        s.append("TM 5")
+    if 1999 <= year <= 2012:
+        s.append("ETM+ 7" + (" (SLC-off)" if year >= 2003 else ""))
+    if year >= 2013:
+        s.append("OLI 8")
+    if year >= 2022:
+        s.append("OLI-2 9")
+    return s
+
+
+def _hist_scale(radius_km):
+    return 60 if radius_km <= 30 else 120 if radius_km <= _LARGE_WINDOW_KM else 250
+
+
+def fetch_ndvi_history(lat, lon, radius_km, boundary_lonlat=None,
+                       dimensions=420, last=None):
     """
-    Serie multitemporal de NDVI por clases: un composite de estación seca por
-    año, mismos cortes y leyenda. Devuelve {año: array RGBA} (años que fallen
-    se omiten) — base del panel comparativo del informe.
+    Análisis temporal de 20 años con Landsat armonizado.
+
+    Devuelve dict:
+      epochs : {año: array RGBA}  NDVI por clases, composite de 3 estaciones
+               secas centrado en el año (mismos cortes que el mapa 4)
+      areas  : {año: [{"clase","pct","ha"}]}  dentro de la cuenca
+      series : [{"year","ndvi","water_ha","valid"}]  una estación seca por año
+      area_ha: superficie de la geometría analizada
     """
     import requests
     from matplotlib import image as mpimg
-    out = {}
+    out = {"epochs": {}, "areas": {}, "series": [], "area_ha": None,
+           "errors": []}
     if not _GEE_READY:
         return out
+    last = last or hist_last_year()
+    first = last - HIST_YEARS
     region = _build_region(lat, lon, radius_km)
+    geom = (ee.Geometry.Polygon([boundary_lonlat])
+            if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+    scale = _hist_scale(radius_km)
     sch = CLASS_SCHEMES["ndvi"]
-    for y in years:
-        span = (f"{y}-01-01", f"{y + 1}-01-01")
-        for mode in ("cloudscore", "scl"):
-            try:
-                s2 = _s2_composite(region, mode=mode, years=span)
-                cls = _classify(s2.normalizedDifference(["B8", "B4"]),
-                                sch["breaks"])
-                url = cls.visualize(min=0, max=len(sch["colors"]) - 1,
-                                    palette=sch["colors"]).getThumbURL(
-                    {"region": region, "dimensions": dimensions,
-                     "format": "png"})
-                r = requests.get(url, timeout=120)
-                if r.status_code == 200:
-                    out[y] = mpimg.imread(io.BytesIO(r.content))
-                    break
-            except Exception as e:
-                print(f"NDVI {y} [{mode}] failed: {e}")
+    try:
+        out["area_ha"] = round(geom.area(maxError=10).divide(1e4).getInfo(), 1)
+    except Exception as e:
+        out["errors"].append(f"área: {e}")
+    tot = out["area_ha"] or 0.0
+
+    for y in hist_epochs(last):
+        start = f"{y - 1}-01-01"
+        end = f"{min(y + 1, last) + 1}-01-01"
+        try:
+            comp = _landsat_median(_landsat_collection(region, start, end))
+            cls = _classify(comp.normalizedDifference(["nir", "red"]),
+                            sch["breaks"])
+            url = cls.visualize(min=0, max=len(sch["colors"]) - 1,
+                                palette=sch["colors"]).getThumbURL(
+                {"region": region, "dimensions": dimensions, "format": "png"})
+            r = requests.get(url, timeout=120)
+            if r.status_code != 200:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            out["epochs"][y] = mpimg.imread(io.BytesIO(r.content))
+            # % por clase sobre píxeles válidos (los huecos SLC-off o nubes
+            # no restan superficie); ha = % × área de la cuenca
+            res = (ee.Image.pixelArea().addBands(cls)
+                   .reduceRegion(reducer=ee.Reducer.sum().group(
+                       groupField=1, groupName="clase"),
+                       geometry=geom, scale=scale, maxPixels=1e10,
+                       bestEffort=True, tileScale=8).getInfo())
+            groups = {int(g["clase"]): float(g["sum"])
+                      for g in res.get("groups", [])}
+            vsum = sum(groups.values()) or 1.0
+            out["areas"][y] = [
+                {"clase": lab,
+                 "pct": round(100.0 * groups.get(i, 0.0) / vsum, 1),
+                 "ha": round(tot * groups.get(i, 0.0) / vsum, 1)}
+                for i, lab in enumerate(sch["labels"])]
+        except Exception as e:
+            out["errors"].append(f"época {y}: {e}")
+            print(f"NDVI histórico {y} falló: {e}")
+
+    # Serie anual: un solo getInfo para los 21 años (cálculo en el servidor)
+    def per_year(y):
+        y = ee.Number(y)
+        d0 = ee.Date.fromYMD(y, 1, 1)
+        col = _landsat_collection(region, d0, d0.advance(1, "year"))
+        comp = _landsat_median(col)
+        ndvi = comp.normalizedDifference(["nir", "red"]).rename("ndvi")
+        water = comp.normalizedDifference(["green", "swir1"]).gt(0).rename("water")
+        valid = ndvi.mask().rename("valid")
+        st = (ndvi.addBands(water).addBands(valid.unmask(0))
+              .reduceRegion(reducer=ee.Reducer.mean(), geometry=geom,
+                            scale=scale, maxPixels=1e10, bestEffort=True,
+                            tileScale=8))
+        return ee.Feature(None, st).set({"year": y, "n": col.size()})
+    try:
+        fc = ee.FeatureCollection(ee.List.sequence(first, last).map(per_year))
+        for f in fc.getInfo()["features"]:
+            p = f["properties"]
+            n = int(p.get("n") or 0)
+            if not n or p.get("ndvi") is None:
+                continue
+            out["series"].append({
+                "year": int(p["year"]),
+                "ndvi": round(float(p["ndvi"]), 4),
+                "water_ha": (round(float(p.get("water") or 0) * tot, 1)
+                             if tot else None),
+                "valid": round(100.0 * float(p.get("valid") or 0), 1),
+                "escenas": n})
+    except Exception as e:
+        out["errors"].append(f"serie anual: {e}")
+        print(f"Serie anual Landsat falló: {e}")
     return out
+
+
+# ── Tendencia NDVI por píxel y zonificación de prioridades ───────────────
+# Umbrales operativos (documentados en el informe): ±0.002 NDVI/año equivale
+# a ±0.04 en 20 años; ±0.005/año a ±0.10. Pendiente crítica 15° (laderas
+# donde la pérdida de cobertura favorece erosión y movimientos en masa).
+TREND_SCHEME = {
+    "breaks": [-0.005, -0.002, 0.002, 0.005],
+    "labels": ["Disminución fuerte (< −0.005/año)",
+               "Disminución (−0.005 a −0.002/año)",
+               "Estable (±0.002/año)",
+               "Incremento (0.002 a 0.005/año)",
+               "Incremento fuerte (> 0.005/año)"],
+    "colors": ["#8c510a", "#d8b365", "#d9d9d9", "#5ab4ac", "#01665e"],
+}
+PRIORITY_SCHEME = {
+    "labels": ["Crítica: disminución del NDVI en ladera ≥ 15°",
+               "Alta: disminución del NDVI, o alta variabilidad en ladera ≥ 15°",
+               "Media: suelo expuesto (NDVI < 0.2) en ladera ≥ 15°",
+               "Conservación: NDVI ≥ 0.4 estable o creciente",
+               "Baja: sin señal de degradación"],
+    "colors": ["#b2182b", "#ef8a62", "#fddbc7", "#1b7837", "#e0e0e0"],
+}
+BAND_LABELS = ["Cuenca baja", "Cuenca media", "Cuenca alta"]
+TREND_DECLINE = -0.002
+STEEP_DEG = 15
+HIGH_VAR = 0.08
+MIN_YEARS = 10
+
+
+def _ndvi_trend_images(region, first, last):
+    """Imágenes por píxel: pendiente de Sen, media, desvío y nº de años."""
+    def per_year(y):
+        y = ee.Number(y)
+        d0 = ee.Date.fromYMD(y, 1, 1)
+        comp = _landsat_median(_landsat_collection(region, d0, d0.advance(1, "year")))
+        ndvi = comp.normalizedDifference(["nir", "red"]).rename("ndvi")
+        t = ee.Image(y.subtract(first)).toFloat().rename("t")
+        return t.updateMask(ndvi.mask()).addBands(ndvi)
+    col = ee.ImageCollection(ee.List.sequence(first, last).map(per_year))
+    sen = col.select(["t", "ndvi"]).reduce(ee.Reducer.sensSlope()).select("slope")
+    stats = col.select("ndvi").reduce(
+        ee.Reducer.mean().combine(ee.Reducer.stdDev(), sharedInputs=True)
+        .combine(ee.Reducer.count(), sharedInputs=True))
+    n = stats.select("ndvi_count")
+    ok = n.gte(MIN_YEARS).And(stats.select("ndvi_mean").gte(0))  # sin agua
+    return (sen.updateMask(ok).rename("sen"),
+            stats.select("ndvi_mean").updateMask(ok).rename("mean"),
+            stats.select("ndvi_stdDev").updateMask(ok).rename("std"))
+
+
+def fetch_ndvi_trend(lat, lon, radius_km, boundary_lonlat=None,
+                     dimensions=512, last=None):
+    """
+    Tendencia interanual del NDVI por píxel (Sen, estación seca, Landsat
+    armonizado) y zonificación de prioridades con la pendiente SRTM.
+
+    Devuelve dict con thumbnails RGBA ("trend_img", "prio_img"), áreas por
+    clase de tendencia y de prioridad (% y ha), su reparto por tercio
+    altitudinal de la cuenca, y estadísticos globales.
+    """
+    import requests
+    from matplotlib import image as mpimg
+    out = {"errors": []}
+    if not _GEE_READY:
+        return out
+    last = last or hist_last_year()
+    first = last - HIST_YEARS
+    region = _build_region(lat, lon, radius_km)
+    geom = (ee.Geometry.Polygon([boundary_lonlat])
+            if boundary_lonlat and len(boundary_lonlat) >= 4 else region)
+    scale = _hist_scale(radius_km)
+    out.update({"first": first, "last": last, "scale_m": scale,
+                "breaks": TREND_SCHEME["breaks"], "steep_deg": STEEP_DEG,
+                "high_var": HIGH_VAR, "min_years": MIN_YEARS})
+    try:
+        sen, mean, std = _ndvi_trend_images(region, first, last)
+        dem = ee.Image("USGS/SRTMGL1_003").select("elevation")
+        slope = ee.Terrain.slope(dem)
+        trend = _classify(sen, TREND_SCHEME["breaks"])
+        steep = slope.gte(STEEP_DEG)
+        decl = sen.lt(TREND_DECLINE)
+        # Prioridad (excluyentes, en orden de precedencia)
+        prio = (ee.Image(4)
+                .where(mean.gte(0.4).And(sen.gte(TREND_DECLINE)), 3)
+                .where(mean.lt(0.2).And(steep), 2)
+                .where(decl.Or(std.gte(HIGH_VAR).And(steep)), 1)
+                .where(decl.And(steep), 0)
+                .updateMask(sen.mask()).rename("prio"))
+        # Tercios altitudinales dentro de la cuenca
+        pct = dem.reduceRegion(ee.Reducer.percentile([33, 66]), geom,
+                               scale=max(scale, 90), maxPixels=1e10,
+                               bestEffort=True).getInfo()
+        p33, p66 = pct.get("elevation_p33"), pct.get("elevation_p66")
+        band = (ee.Image(0).where(dem.gte(p33), 1).where(dem.gte(p66), 2)
+                if p33 is not None and p66 is not None else ee.Image(0))
+        out["elev_breaks"] = [p33, p66]
+        # Llave combinada → un solo reduceRegion agrupado
+        key = (band.multiply(100).add(trend.multiply(10)).add(prio)
+               .updateMask(sen.mask()).toInt().rename("key"))
+        res = (ee.Image.pixelArea().divide(1e4).addBands(key)
+               .reduceRegion(reducer=ee.Reducer.sum().group(groupField=1,
+                                                            groupName="key"),
+                             geometry=geom, scale=scale, maxPixels=1e10,
+                             bestEffort=True, tileScale=8).getInfo())
+        cells = {int(g["key"]): float(g["sum"]) for g in res.get("groups", [])}
+        out["cells"] = cells
+        glob = (sen.addBands(mean).addBands(std)
+                .reduceRegion(ee.Reducer.median(), geom, scale=scale,
+                              maxPixels=1e10, bestEffort=True, tileScale=8)
+                .getInfo())
+        out["median_sen"] = glob.get("sen")
+        out["median_mean"] = glob.get("mean")
+        out["median_std"] = glob.get("std")
+        for name, img, sch in (("trend_img", trend, TREND_SCHEME),
+                               ("prio_img", prio, PRIORITY_SCHEME)):
+            url = img.visualize(min=0, max=len(sch["colors"]) - 1,
+                                palette=sch["colors"]).getThumbURL(
+                {"region": region, "dimensions": dimensions, "format": "png"})
+            r = requests.get(url, timeout=180)
+            if r.status_code == 200:
+                out[name] = mpimg.imread(io.BytesIO(r.content))
+            else:
+                out["errors"].append(f"{name}: HTTP {r.status_code}")
+    except Exception as e:
+        out["errors"].append(f"tendencia por píxel: {e}")
+        print(f"Tendencia NDVI por píxel falló: {e}")
+    return out
+
+
+def summarize_trend_cells(cells):
+    """
+    Agrega las celdas {banda*100 + tendencia*10 + prioridad: ha} en tablas:
+    por tendencia, por prioridad y por tercio altitudinal. Puro Python
+    (probado sin GEE).
+    """
+    tot = sum(cells.values())
+    if tot <= 0:
+        return None
+    nt, npr = len(TREND_SCHEME["labels"]), len(PRIORITY_SCHEME["labels"])
+    by_t = [0.0] * nt
+    by_p = [0.0] * npr
+    band_t = [[0.0] * nt for _ in BAND_LABELS]
+    band_p = [[0.0] * npr for _ in BAND_LABELS]
+    for k, ha in cells.items():
+        b, t, p = k // 100, (k // 10) % 10, k % 10
+        if not (0 <= b < 3 and 0 <= t < nt and 0 <= p < npr):
+            continue
+        by_t[t] += ha
+        by_p[p] += ha
+        band_t[b][t] += ha
+        band_p[b][p] += ha
+
+    def rows(vals, labels):
+        return [{"clase": l, "ha": round(v, 1), "pct": round(100 * v / tot, 1)}
+                for l, v in zip(labels, vals)]
+
+    def band_rows(mat, idx):
+        out = []
+        for b, lab in enumerate(BAND_LABELS):
+            bt = sum(mat[b])
+            sel = sum(mat[b][i] for i in idx)
+            out.append({"banda": lab, "ha": round(bt, 1),
+                        "sel_ha": round(sel, 1),
+                        "sel_pct": round(100 * sel / bt, 1) if bt else 0.0})
+        return out
+
+    decl = [0, 1]
+    incr = [3, 4]
+    crit = [0, 1]
+    res = {
+        "total_ha": round(tot, 1),
+        "trend": rows(by_t, TREND_SCHEME["labels"]),
+        "prio": rows(by_p, PRIORITY_SCHEME["labels"]),
+        "decl_pct": round(100 * sum(by_t[i] for i in decl) / tot, 1),
+        "incr_pct": round(100 * sum(by_t[i] for i in incr) / tot, 1),
+        "stab_pct": round(100 * by_t[2] / tot, 1),
+        "crit_pct": round(100 * sum(by_p[i] for i in crit) / tot, 1),
+        "cons_pct": round(100 * by_p[3] / tot, 1),
+        "band_decl": band_rows(band_t, decl),
+        "band_incr": band_rows(band_t, incr),
+        "band_crit": band_rows(band_p, crit),
+        "band_cons": band_rows(band_p, [3]),
+        # matrices [tercio][clase] en ha (para las tablas del informe)
+        "band_trend": [[round(v, 1) for v in row] for row in band_t],
+        "band_prio": [[round(v, 1) for v in row] for row in band_p],
+        "bands": BAND_LABELS,
+    }
+    nz = [r for r in res["band_decl"] if r["ha"] > 0]
+    res["band_max_decl"] = (max(nz, key=lambda r: r["sel_pct"])["banda"]
+                            if nz and max(r["sel_pct"] for r in nz) > 0 else None)
+    nz = [r for r in res["band_crit"] if r["ha"] > 0]
+    res["band_max_crit"] = (max(nz, key=lambda r: r["sel_pct"])["banda"]
+                            if nz and max(r["sel_pct"] for r in nz) > 0 else None)
+    nz = [r for r in res["band_cons"] if r["ha"] > 0]
+    res["band_max_cons"] = (max(nz, key=lambda r: r["sel_pct"])["banda"]
+                            if nz and max(r["sel_pct"] for r in nz) > 0 else None)
+    return res
+
+
+def mann_kendall_sen(years, values):
+    """
+    Tendencia monotónica: pendiente de Sen (unid./año) y prueba de
+    Mann-Kendall (aprox. normal, sin corrección por empates). Devuelve dict
+    o None si hay menos de 8 datos.
+    """
+    import math
+    pts = [(float(x), float(v)) for x, v in zip(years, values) if v is not None]
+    n = len(pts)
+    if n < 8:
+        return None
+    s = 0
+    slopes = []
+    for i in range(n - 1):
+        for j in range(i + 1, n):
+            d = pts[j][1] - pts[i][1]
+            s += (d > 0) - (d < 0)
+            dx = pts[j][0] - pts[i][0]
+            if dx:
+                slopes.append(d / dx)
+    var = n * (n - 1) * (2 * n + 5) / 18.0
+    z = (s - 1) / math.sqrt(var) if s > 0 else (s + 1) / math.sqrt(var) if s < 0 else 0.0
+    p = 2 * (1 - 0.5 * (1 + math.erf(abs(z) / math.sqrt(2))))
+    slopes.sort()
+    m = len(slopes)
+    sen = (slopes[m // 2] if m % 2 else 0.5 * (slopes[m // 2 - 1] + slopes[m // 2]))
+    if p >= 0.05:
+        trend = "sin tendencia significativa"
+    else:
+        trend = "creciente" if s > 0 else "decreciente"
+    return {"n": n, "S": s, "z": round(z, 2), "p": round(p, 4),
+            "sen": sen, "tendencia": trend}
 
 
 def debug_layer(map_type, lat, lon, radius_km=15.0):

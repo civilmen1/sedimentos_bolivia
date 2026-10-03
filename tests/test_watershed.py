@@ -66,7 +66,7 @@ def test_generate_watershed_map_returns_png(monkeypatch):
 
 
 def test_generate_all_thematic_maps_has_watershed_first(monkeypatch):
-    """Los 9 mapas se generan y 'watershed' es el primero."""
+    """Los 13 mapas (9 temáticos + 4 de riesgo) se generan y 'watershed' es el primero."""
     monkeypatch.setattr(app_module, "gee_ready", lambda: False)
     app_module._MAP_CACHE.clear()
     app_module._WATERSHED_CACHE.clear()
@@ -76,7 +76,8 @@ def test_generate_all_thematic_maps_has_watershed_first(monkeypatch):
 
     assert keys[0] == "watershed"
     expected = {"watershed", "dem", "slope", "ndvi", "ndwi",
-                "ndti", "manning", "risk", "jrc"}
+                "ndti", "manning", "risk", "jrc",
+                "erosion", "landslide", "fire", "flood"}
     assert set(keys) == expected
     for mt, png in maps.items():
         assert png.startswith("data:image/png;base64,"), mt

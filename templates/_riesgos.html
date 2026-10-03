@@ -1,0 +1,77 @@
+{# ════════════════════════════════════════════════════════════════════════
+   8.9 Mapas de riesgos naturales (susceptibilidad). Requiere results.maps,
+   results.class_areas, results.map_real, results.map_sources.
+   El texto se condiciona a los datos de la corrida; no inventa valores.
+   ════════════════════════════════════════════════════════════════════════ #}
+{% set ro = results.risk_order or ['erosion','landslide','fire','flood'] %}
+{% set ca = results.class_areas or {} %}
+{% set mr = results.map_real or {} %}
+{% macro alto(mt, n) %}{% set rows = ca.get(mt) or [] %}{% set sel = rows[-n:] %}{{ "%.1f"|format(sel|sum(attribute='pct')) }}{% endmacro %}
+{% macro alto_ha(mt, n) %}{% set rows = ca.get(mt) or [] %}{% set sel = rows[-n:] %}{{ "{:,.0f}".format(sel|sum(attribute='ha')) }}{% endmacro %}
+{% macro fig(mt, num) %}
+{% if results.maps and results.maps[mt] %}
+<figure class="apa-figure" style="page-break-inside:avoid;">
+  <img src="{{ results.maps[mt] }}" alt="{{ results.map_titles[mt] }}">
+  <figcaption><em>Mapa R-{{ num }}.</em> {{ results.map_titles[mt] }}.{% if not mr.get(mt, false) %} <strong style="color:#c0392b">⚠ DATOS SINTÉTICOS — no representan la cuenca; no usar.</strong>{% endif %} Fuente: {{ results.map_sources[mt] if results.map_sources else '—' }}. Proyección UTM WGS84; parteaguas y red de drenaje superpuestos. Autor: Ing. Luis Franco Guarachi · Creador: www.frava.tech.</figcaption>
+</figure>
+{% endif %}
+{% endmacro %}
+
+<h2>8.9 Mapas de Riesgos Naturales (Susceptibilidad)</h2>
+<p>Esta sección presenta cuatro mapas de <strong>susceptibilidad</strong>: erosión hídrica, deslizamientos, incendios forestales e inundación. Todos se calcularon en Google Earth Engine para el mismo encuadre de la cuenca. La susceptibilidad indica la propensión del terreno a un fenómeno según sus factores condicionantes (pendiente, cobertura, suelo, lluvia, posición en el relieve e historial de quemas). No es una amenaza con probabilidad de ocurrencia ni un riesgo, que exigiría además evaluar la exposición y la vulnerabilidad de la población y la infraestructura. Cada mapa se clasificó con cortes fijos, y su tabla da la superficie por clase dentro del parteaguas. Los mapas complementan la zonificación por tendencia del NDVI de la sección 8.8.</p>
+
+{# ── Erosión ───────────────────────────────────────────────────────── #}
+<h3>8.9.1 Susceptibilidad a erosión hídrica (RUSLE)</h3>
+<p>La pérdida de suelo se estimó por píxel con la ecuación universal revisada RUSLE, A = R·K·LS·C·P (Renard et al., 1997), con las mismas fórmulas del módulo RUSLE del software. Cada factor se obtuvo así:</p>
+<ul>
+  <li><strong>R (erosividad de la lluvia):</strong> ecuación de Hurni (1985) con la precipitación media anual CHIRPS 2006–2025.</li>
+  <li><strong>K (erodibilidad del suelo):</strong> tabla por clase textural USDA de OpenLandMap.</li>
+  <li><strong>LS (topografía):</strong> formulación de Moore y Burch (1986) con la pendiente SRTM y el área de aporte de MERIT Hydro, limitada a 300 m de longitud de ladera.</li>
+  <li><strong>C (cobertura):</strong> función de van der Knijff sobre el NDVI Sentinel-2 de estación seca.</li>
+  <li><strong>P (prácticas de conservación):</strong> se asignó según la pendiente en las áreas de cultivo de ESA WorldCover y se tomó igual a 1 en el resto.</li>
+</ul>
+{{ fig('erosion', 1) }}
+{% set mt = 'erosion' %}{% include "_class_areas.html" %}
+<p>{% if ca.get('erosion') %}El {{ alto('erosion', 3) }} % de la cuenca (unas {{ alto_ha('erosion', 3) }} ha) presenta pérdidas superiores a 20 t/ha/año, en las clases muy alta, severa o crítica. Las clases ligera y moderada (&lt; 10 t/ha/año) cubren el {{ "%.1f"|format((ca['erosion'][:2])|sum(attribute='pct')) }} %.{% else %}No se obtuvieron superficies por clase para este mapa.{% endif %}
+{% if results.rusle_basin %}La pérdida de suelo media de la cuenca es de {{ "%.1f"|format(results.rusle_basin.mean) }} t/ha/año (mediana de {{ "%.1f"|format(results.rusle_basin.median) }}), lo que equivale a unas {{ "{:,.0f}".format(results.rusle_basin.total_t) }} t/año de suelo movilizado en {{ "{:,.0f}".format(results.rusle_basin.area_ha) }} ha. {% if results.rusle_basin.mean > 11.2 %}Este valor supera el límite de tolerancia de pérdida de suelo usado habitualmente (alrededor de 11 t/ha/año; Wischmeier y Smith, 1978), lo que indica degradación activa del recurso suelo.{% else %}Este valor está por debajo del límite de tolerancia de pérdida de suelo usado habitualmente (alrededor de 11 t/ha/año; Wischmeier y Smith, 1978), aunque puede haber sectores puntuales que lo superen.{% endif %}{% endif %}
+RUSLE estima la erosión potencial laminar y en surcos en las laderas, no el sedimento que llega al cauce. Para estimar la producción de sedimentos en el punto de control debe aplicarse una tasa de entrega (SDR). El modelo no se calibró con parcelas ni con aforos de sedimento de esta cuenca.</p>
+
+{# ── Deslizamientos ────────────────────────────────────────────────── #}
+<h3>8.9.2 Susceptibilidad a deslizamientos</h3>
+<p>Se calculó un índice heurístico multicriterio entre 0 y 1. La <strong>pendiente</strong> (SRTM) actúa como factor condicionante: vale 0 bajo 5° y 1 desde 35°. Multiplica a una combinación de la <strong>falta de cobertura vegetal</strong> (NDVI Sentinel-2, peso 0.4), el <strong>uso del suelo</strong> (ESA WorldCover, peso 0.3) y la <strong>precipitación media anual</strong> (CHIRPS, peso 0.3), escalada entre 0.5 y 1. Con esta formulación los terrenos planos no se califican como susceptibles, y en las laderas empinadas la susceptibilidad crece cuando la cobertura se pierde y la lluvia aumenta. Se excluyeron el agua y la nieve.</p>
+{{ fig('landslide', 2) }}
+{% set mt = 'landslide' %}{% include "_class_areas.html" %}
+<p>{% if ca.get('landslide') %}Las clases de susceptibilidad alta y muy alta ocupan el {{ alto('landslide', 2) }} % de la cuenca (unas {{ alto_ha('landslide', 2) }} ha). Corresponden a laderas de más de 25° con cobertura escasa o con usos del suelo que ofrecen poca protección.{% else %}No se obtuvieron superficies por clase para este mapa.{% endif %}
+El índice no incluye la litología, la estructura geológica, las fallas, los cortes de caminos ni la sismicidad, y no se validó con un inventario de deslizamientos. Sirve para orientar inspecciones y estudios geotécnicos, pero no reemplaza un mapa de amenaza por movimientos en masa.</p>
+
+{# ── Incendios ─────────────────────────────────────────────────────── #}
+<h3>8.9.3 Susceptibilidad a incendios forestales</h3>
+<p>El índice multicriterio (0 a 1) parte de la <strong>disponibilidad de combustible</strong>, que combina el tipo de cobertura de ESA WorldCover (máximo en pastizales y matorrales) con el NDVI de estación seca. Los suelos sin vegetación (NDVI &lt; 0.1) se consideran sin combustible, y el combustible se reduce en la vegetación más húmeda (NDVI &gt; 0.5). Este factor multiplica a una combinación de la <strong>recurrencia de quemas</strong> (número de años con área quemada MODIS MCD64A1 entre 2001 y 2025; peso 0.5, con saturación en 3 años), la <strong>pendiente</strong> (peso 0.3) y la <strong>orientación</strong> de la ladera (peso 0.2). En el hemisferio sur las laderas orientadas al norte reciben más radiación y son más secas.</p>
+{{ fig('fire', 3) }}
+{% set mt = 'fire' %}{% include "_class_areas.html" %}
+<p>{% if ca.get('fire') %}Las clases de susceptibilidad alta y muy alta ocupan el {{ alto('fire', 2) }} % de la cuenca (unas {{ alto_ha('fire', 2) }} ha). En ellas coinciden combustible herbáceo o arbustivo seco, laderas expuestas y, donde existe, un historial de quemas.{% else %}No se obtuvieron superficies por clase para este mapa.{% endif %}
+El producto MCD64A1 tiene 500 m de resolución y omite las quemas pequeñas y agrícolas. Además, el índice no considera variables meteorológicas diarias como temperatura, humedad o viento. Para la gestión operativa debe complementarse con los focos de calor FIRMS (MODIS/VIIRS) y con índices de peligro meteorológico de incendio.</p>
+
+{# ── Inundación ────────────────────────────────────────────────────── #}
+<h3>8.9.4 Susceptibilidad a inundación</h3>
+<p>La susceptibilidad a inundación se clasificó con el indicador HAND (<em>Height Above Nearest Drainage</em>; Nobre et al., 2011) de MERIT Hydro (Yamazaki et al., 2019). Este indicador mide cuántos metros está cada píxel por encima del cauce más cercano al que drena. Los terrenos con HAND menor a 1 m, y los cuerpos de agua con ocurrencia JRC de al menos 50 %, se clasifican con susceptibilidad muy alta. La clase alta corresponde a HAND entre 1 y 3 m, la media entre 3 y 6 m, la baja entre 6 y 15 m, y la muy baja a más de 15 m.</p>
+{{ fig('flood', 4) }}
+{% set mt = 'flood' %}{% include "_class_areas.html" %}
+<p>{% if ca.get('flood') %}Las clases alta y muy alta (HAND &lt; 3 m) ocupan el {{ alto('flood', 2) }} % de la cuenca (unas {{ alto_ha('flood', 2) }} ha) y delimitan las llanuras y terrazas bajas que pueden ser alcanzadas por crecidas.{% else %}No se obtuvieron superficies por clase para este mapa.{% endif %}
+El HAND es un indicador topográfico de 90 m que no considera el caudal ni el periodo de retorno. Para definir manchas de inundación de diseño en la zona de obras debe modelarse la hidráulica con HEC-RAS a partir de los caudales del estudio hidrológico.</p>
+
+{# ── Síntesis ──────────────────────────────────────────────────────── #}
+<h3>8.9.5 Síntesis de susceptibilidad</h3>
+{% if ca.get('erosion') or ca.get('landslide') or ca.get('fire') or ca.get('flood') %}
+<table style="width:100%; font-size:8.5pt; page-break-inside:avoid;">
+  <thead><tr><th>Fenómeno</th><th>Clases consideradas críticas</th><th style="text-align:right;">Superficie (ha)</th><th style="text-align:right;">% de la cuenca</th><th>Origen del mapa</th></tr></thead>
+  <tbody>
+    {% for mt, n, cls in [('erosion', 3, '> 20 t/ha/año'), ('landslide', 2, 'Alta y muy alta'), ('fire', 2, 'Alta y muy alta'), ('flood', 2, 'HAND < 3 m')] %}
+    {% if ca.get(mt) %}
+    <tr><td>{{ results.map_titles[mt] }}</td><td>{{ cls }}</td><td style="text-align:right;">{{ alto_ha(mt, n) }}</td><td style="text-align:right;">{{ alto(mt, n) }}</td><td>{% if mr.get(mt) %}GEE (real){% else %}<span style="color:#c0392b">Sintético</span>{% endif %}</td></tr>
+    {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+<p>Los sectores donde se superponen varias susceptibilidades altas, en particular erosión y deslizamientos en laderas sin cobertura, deben atenderse primero, y conviene contrastarlos con las zonas de prioridad crítica y alta de la sección 8.8. Las medidas recomendadas son la conservación de suelos y la revegetación en las laderas, el manejo del fuego y cortafuegos en pastizales y matorrales con historial de quemas, y la restricción de la ocupación en las áreas con HAND menor a 3 m. Todos los índices son de susceptibilidad y deben validarse en campo antes de usarse en ordenamiento territorial o en diseño de obras.</p>

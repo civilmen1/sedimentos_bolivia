@@ -367,14 +367,11 @@ figcaption { font-size: 11pt; text-align: left; text-indent: 0; margin-top: 4pt;
 {% endif %}
 {% endfor %}
 {% endif %}
-{% if results.ndvi_multi %}
-<h2>8.7 Análisis Multitemporal de la Vegetación (NDVI por clases)</h2>
-<p>Composite de estación seca por año, con cortes y leyenda idénticos en todos los paneles.</p>
-<figure class="apa-figure" style="page-break-inside:avoid;">
-  <img src="{{ results.ndvi_multi }}" alt="NDVI multitemporal">
-  <figcaption><em>Figura.</em> NDVI por clases por año (Sentinel-2 L2A, Cloud Score+). {{ results.class_refs['ndvi'] }}.</figcaption>
-</figure>
+{% if results.hist or results.ndvi_multi %}
+{% include "_historico.html" %}
 {% endif %}
+{% include "_ndvi_informe.html" %}
+{% include "_riesgos.html" %}
 
 <!-- ═══════════════════ CAP. 9 ═══════════════════ -->
 <h1>9. Impactos sobre Infraestructura</h1>
